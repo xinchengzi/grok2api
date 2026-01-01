@@ -96,23 +96,52 @@ class GrokClient:
 
     @staticmethod
     def _extract_content(messages: List[Dict]) -> Tuple[str, List[str]]:
-        """提取文本和图片"""
-        texts, images = [], []
+        """提取文本和图片 - 格式化多轮对话（改进版）"""
+        parts, images = [], []
         
-        for msg in messages:
+        # 是否有多条消息（需要格式化）
+        need_format = len(messages) > 1
+        
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "user")
             content = msg.get("content", "")
             
+            # 处理多模态内容
             if isinstance(content, list):
+                text_parts = []
                 for item in content:
                     if item.get("type") == "text":
-                        texts.append(item.get("text", ""))
+                        text_parts.append(item.get("text", ""))
                     elif item.get("type") == "image_url":
                         if url := item.get("image_url", {}).get("url"):
                             images.append(url)
+                content = "".join(text_parts)
+            
+            if not content.strip():
+                continue
+            
+            # 单条消息不需要格式化
+            if not need_format:
+                parts.append(content)
             else:
-                texts.append(content)
+                # 多条消息需要格式化
+                is_last = (i == len(messages) - 1)
+                
+                if role == "system":
+                    parts.append(f"[系统指令]: {content}")
+                elif role == "user":
+                    if is_last:
+                        parts.append(f"[当前问题]: {content}")
+                    else:
+                        parts.append(f"[历史用户消息]: {content}")
+                elif role == "assistant":
+                    parts.append(f"[历史AI回复]: {content}")
         
-        return "".join(texts), images
+        # 添加指导语（仅多轮对话）
+        if need_format:
+            parts.append("\n[注意：请根据以上对话历史回答当前问题，不要重复历史回复中的内容。]")
+        
+        return "\n".join(parts), images
 
     @staticmethod
     async def _upload(urls: List[str], token: str) -> Tuple[List[str], List[str]]:
