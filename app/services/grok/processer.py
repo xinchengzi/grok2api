@@ -101,8 +101,9 @@ class GrokResponseProcessor:
                 content = model_response.get("message", "")
                 model_name = model_response.get("model")
 
-                # 处理图片
+                # 处理图片（只取第一张，确保连续对话修改时 Grok 知道基于哪张图片）
                 if images := model_response.get("generatedImageUrls"):
+                    images = images[:1]
                     content = await GrokResponseProcessor._append_images(content, images, auth_token)
 
                 result = GrokResponseProcessor._build_response(content, model_name)
@@ -232,13 +233,13 @@ class GrokResponseProcessor:
 
                     token = grok_resp.get("token", "")
 
-                    # 图片处理
+                    # 图片处理（只取第一张，确保连续对话修改时 Grok 知道基于哪张图片）
                     if is_image:
                         if model_resp := grok_resp.get("modelResponse"):
                             image_mode = setting.global_config.get("image_mode", "url")
                             content = ""
 
-                            for img in model_resp.get("generatedImageUrls", []):
+                            for img in model_resp.get("generatedImageUrls", [])[:1]:
                                 try:
                                     if image_mode == "base64":
                                         # Base64模式 - 分块发送
