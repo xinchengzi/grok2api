@@ -1,6 +1,7 @@
 """Grok API 客户端 - 处理OpenAI到Grok的请求转换和响应处理"""
 
 import asyncio
+import re
 import orjson
 from typing import Dict, List, Tuple, Any, Optional
 from curl_cffi import requests as curl_requests
@@ -43,13 +44,16 @@ class GrokClient:
     async def openai_to_grok(request: dict):
         """转换OpenAI请求为Grok请求"""
         model = request["model"]
-        content, images = GrokClient._extract_content(request["messages"])
+        content, images, has_user_uploaded = GrokClient._extract_content(request["messages"])
         stream = request.get("stream", False)
         
         # 获取模型信息
         info = Models.get_model_info(model)
         grok_model, mode = Models.to_grok(model)
-        is_video = info.get("is_video_model", False)
+        
+        # 视频生成模式：只有当用户主动上传图片时才启用
+        # 如果只是历史生成的图片（用于连续对话修改），走标准图片生成流程
+        is_video = info.get("is_video_model", False) and has_user_uploaded
         
         # 视频模型限制
         if is_video and len(images) > 1:
@@ -94,10 +98,23 @@ class GrokClient:
 
         raise last_err or GrokApiException("请求失败", "REQUEST_ERROR")
 
+    # 从 markdown 中提取图片 URL 的正则
+    _IMG_PATTERN = re.compile(r'!\[.*?\]\((https?://[^\s\)]+)\)')
+
     @staticmethod
-    def _extract_content(messages: List[Dict]) -> Tuple[str, List[str]]:
-        """提取文本和图片 - 格式化多轮对话（改进版）"""
+    def _extract_content(messages: List[Dict]) -> Tuple[str, List[str], bool]:
+        """提取文本和图片 - 格式化多轮对话（改进版）
+        
+        支持从 assistant 历史消息中提取生成的图片，用于连续对话修改图片场景。
+        
+        Returns:
+            (text, images, has_user_uploaded_images) 元组
+            - text: 格式化后的文本
+            - images: 所有图片 URL 列表
+            - has_user_uploaded_images: 是否有用户主动上传的图片（用于区分视频生成场景）
+        """
         parts, images = [], []
+        has_user_uploaded_images = False  # 用户是否主动上传了图片
         
         # 是否有多条消息（需要格式化）
         need_format = len(messages) > 1
@@ -106,7 +123,7 @@ class GrokClient:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             
-            # 处理多模态内容
+            # 处理多模态内容（OpenAI Vision 格式）- 用户主动上传的图片
             if isinstance(content, list):
                 text_parts = []
                 for item in content:
@@ -115,7 +132,17 @@ class GrokClient:
                     elif item.get("type") == "image_url":
                         if url := item.get("image_url", {}).get("url"):
                             images.append(url)
+                            has_user_uploaded_images = True  # 标记用户主动上传了图片
                 content = "".join(text_parts)
+            
+            # 从 assistant 的历史回复中提取生成的图片 URL
+            # 这样在连续对话中，Grok 可以看到之前生成的图片
+            # 注意：这些是历史生成的图片，不是用户主动上传的
+            if role == "assistant" and isinstance(content, str):
+                for url in GrokClient._IMG_PATTERN.findall(content):
+                    # 只提取我们缓存的图片或 Grok 原始图片
+                    if "/images/" in url or "assets.grok.com" in url:
+                        images.append(url)
             
             if not content.strip():
                 continue
@@ -141,7 +168,7 @@ class GrokClient:
         if need_format:
             parts.append("\n[注意：请根据以上对话历史回答当前问题，不要重复历史回复中的内容。]")
         
-        return "\n".join(parts), images
+        return "\n".join(parts), images, has_user_uploaded_images
 
     @staticmethod
     async def _upload(urls: List[str], token: str) -> Tuple[List[str], List[str]]:
