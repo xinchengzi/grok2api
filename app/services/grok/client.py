@@ -3,6 +3,7 @@
 import asyncio
 import re
 import orjson
+import time
 from typing import Dict, List, Tuple, Any, Optional
 from curl_cffi import requests as curl_requests
 
@@ -15,6 +16,7 @@ from app.services.grok.token import token_manager
 from app.services.grok.upload import ImageUploadManager
 from app.services.grok.create import PostCreateManager
 from app.core.exception import GrokApiException
+from app.services.call_log import call_log_service
 
 
 # 常量
@@ -29,6 +31,12 @@ class GrokClient:
     """Grok API 客户端"""
     
     _upload_sem = None  # 延迟初始化
+    _TLS_ERROR_HINTS = (
+        "TLS connect error",
+        "curl: (35)",
+        "OPENSSL_internal",
+        "invalid library",
+    )
 
     @staticmethod
     def _get_upload_semaphore():
@@ -65,11 +73,21 @@ class GrokClient:
     @staticmethod
     async def _retry(model: str, content: str, images: List[str], grok_model: str, mode: str, is_video: bool, stream: bool):
         """重试请求"""
+        from app.core.proxy_pool import proxy_pool
+        
         last_err = None
+        start_time = time.time()
+        sso_token = ""
+        proxy_used = ""
 
         for i in range(MAX_RETRY):
             try:
                 token = token_manager.get_token(model)
+                sso_token = token_manager._extract_sso(token) or ""
+                
+                # 获取当前使用的代理
+                proxy_used = await proxy_pool.get_proxy_for_sso(sso_token) or ""
+                
                 img_ids, img_uris = await GrokClient._upload(images, token)
 
                 # 视频模型创建会话
@@ -78,24 +96,81 @@ class GrokClient:
                     post_id = await GrokClient._create_post(img_ids[0], img_uris[0], token)
 
                 payload = GrokClient._build_payload(content, grok_model, mode, img_ids, img_uris, is_video, post_id)
-                return await GrokClient._request(payload, token, model, stream, post_id)
+                result = await GrokClient._request(payload, token, model, stream, post_id)
+                media_urls = []
+                if not stream and isinstance(result, tuple):
+                    result, media_urls = result
+                
+                # 记录成功日志
+                response_time = time.time() - start_time
+                asyncio.create_task(call_log_service.record_call(
+                    sso=sso_token,
+                    model=model,
+                    success=True,
+                    status_code=200,
+                    response_time=response_time,
+                    proxy_used=proxy_used,
+                    media_urls=media_urls
+                ))
+                
+                # 标记代理成功
+                if proxy_used:
+                    proxy_pool.mark_success(proxy_used)
+                
+                return result
 
             except GrokApiException as e:
                 last_err = e
                 # 检查是否可重试
                 if e.error_code not in ["HTTP_ERROR", "NO_AVAILABLE_TOKEN"]:
+                    # 记录失败日志
+                    response_time = time.time() - start_time
+                    status = e.context.get("status", 0) if e.context else 0
+                    asyncio.create_task(call_log_service.record_call(
+                        sso=sso_token,
+                        model=model,
+                        success=False,
+                        status_code=status,
+                        response_time=response_time,
+                        error_message=str(e),
+                        proxy_used=proxy_used
+                    ))
                     raise
 
                 status = e.context.get("status") if e.context else None
                 retry_codes = setting.grok_config.get("retry_status_codes", [401, 429])
                 
                 if status not in retry_codes:
+                    # 记录失败日志
+                    response_time = time.time() - start_time
+                    asyncio.create_task(call_log_service.record_call(
+                        sso=sso_token,
+                        model=model,
+                        success=False,
+                        status_code=status or 0,
+                        response_time=response_time,
+                        error_message=str(e),
+                        proxy_used=proxy_used
+                    ))
                     raise
 
                 if i < MAX_RETRY - 1:
                     logger.warning(f"[Client] 失败(状态:{status}), 重试 {i+1}/{MAX_RETRY}")
                     await asyncio.sleep(0.5)
 
+        # 记录最终失败日志
+        response_time = time.time() - start_time
+        status = last_err.context.get("status", 0) if last_err and last_err.context else 0
+        asyncio.create_task(call_log_service.record_call(
+            sso=sso_token,
+            model=model,
+            success=False,
+            status_code=status,
+            response_time=response_time,
+            error_message=str(last_err) if last_err else "请求失败",
+            proxy_used=proxy_used
+        ))
+        
         raise last_err or GrokApiException("请求失败", "REQUEST_ERROR")
 
     # 从 markdown 中提取图片 URL 的正则
@@ -251,17 +326,22 @@ class GrokClient:
         """发送请求"""
         if not token:
             raise GrokApiException("认证令牌缺失", "NO_AUTH_TOKEN")
+        sso_token = token_manager._extract_sso(token) or ""
+        from app.core.proxy_pool import proxy_pool
 
         # 外层重试：可配置状态码（401/429等）
         retry_codes = setting.grok_config.get("retry_status_codes", [401, 429])
         MAX_OUTER_RETRY = 3
+        MAX_TLS_RETRY = int(setting.grok_config.get("max_tls_retries", 2))
         
         for outer_retry in range(MAX_OUTER_RETRY + 1):  # +1确保实际重试3次
             # 内层重试：403代理池重试
             max_403_retries = 5
             retry_403_count = 0
+            tls_retry_count = 0
             
             while retry_403_count <= max_403_retries:
+                proxy = None
                 try:
                     # 构建请求
                     headers = GrokClient._build_headers(token)
@@ -272,14 +352,15 @@ class GrokClient:
                             headers["Referer"] = f"https://grok.com/imagine/{ref_id}"
                     
                     # 异步获取代理
-                    from app.core.proxy_pool import proxy_pool
-                    
                     # 如果是403重试且使用代理池，强制刷新代理
                     if retry_403_count > 0 and proxy_pool._enabled:
                         logger.info(f"[Client] 403重试 {retry_403_count}/{max_403_retries}，刷新代理...")
-                        proxy = await proxy_pool.force_refresh()
+                        if sso_token:
+                            proxy = await proxy_pool.get_proxy_for_sso(sso_token)
+                        else:
+                            proxy = await proxy_pool.force_refresh()
                     else:
-                        proxy = await setting.get_proxy_async("service")
+                        proxy = await proxy_pool.get_proxy_for_sso(sso_token) if sso_token else await setting.get_proxy_async("service")
                     
                     proxies = {"http": proxy, "https": proxy} if proxy else None
                     
@@ -297,6 +378,8 @@ class GrokClient:
                     
                     # 内层403重试：仅当有代理池时触发
                     if response.status_code == 403 and proxy_pool._enabled:
+                        if proxy:
+                            proxy_pool.mark_failure(proxy)
                         retry_403_count += 1
                         
                         if retry_403_count <= max_403_retries:
@@ -325,6 +408,10 @@ class GrokClient:
                     # 成功 - 重置失败计数
                     asyncio.create_task(token_manager.reset_failure(token))
                     
+                    # 标记代理成功
+                    if proxy:
+                        proxy_pool.mark_success(proxy)
+                    
                     # 如果是重试成功，记录日志
                     if outer_retry > 0 or retry_403_count > 0:
                         logger.info(f"[Client] 重试成功！")
@@ -337,7 +424,26 @@ class GrokClient:
                     return result
                     
                 except curl_requests.RequestsError as e:
-                    logger.error(f"[Client] 网络错误: {e}")
+                    err_text = str(e)
+                    is_tls = any(hint in err_text for hint in GrokClient._TLS_ERROR_HINTS)
+                    if is_tls and tls_retry_count < MAX_TLS_RETRY:
+                        tls_retry_count += 1
+                        if proxy:
+                            try:
+                                proxy_pool.mark_failure(proxy)
+                            except Exception:
+                                pass
+                        logger.warning(
+                            f"[Client] TLS/握手瞬断，重试 {tls_retry_count}/{MAX_TLS_RETRY} "
+                            f"(outer={outer_retry}/{MAX_OUTER_RETRY}, 403_retry={retry_403_count}/{max_403_retries}, proxy={'on' if proxy else 'off'}): {e}"
+                        )
+                        await asyncio.sleep(0.4 * tls_retry_count)
+                        continue
+
+                    logger.error(
+                        f"[Client] 网络错误(outer={outer_retry}/{MAX_OUTER_RETRY}, 403_retry={retry_403_count}/{max_403_retries}, "
+                        f"tls_retry={tls_retry_count}/{MAX_TLS_RETRY}, proxy={'on' if proxy else 'off'}): {e}"
+                    )
                     raise GrokApiException(f"网络错误: {e}", "NETWORK_ERROR") from e
                 except GrokApiException:
                     # 重新抛出GrokApiException（包括403错误）

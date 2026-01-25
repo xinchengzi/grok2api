@@ -14,6 +14,7 @@ from app.core.storage import storage_manager
 from app.core.config import setting
 from app.services.grok.token import token_manager
 from app.services.grok.processer import shutdown_iter_executor
+from app.services.call_log import call_log_service
 from app.api.v1.chat import router as chat_router
 from app.api.v1.models import router as models_router
 from app.api.v1.images import router as images_router
@@ -67,6 +68,7 @@ async def lifespan(app: FastAPI):
     proxy_url = setting.grok_config.get("proxy_url", "")
     proxy_pool_url = setting.grok_config.get("proxy_pool_url", "")
     proxy_pool_interval = setting.grok_config.get("proxy_pool_interval", 300)
+    proxy_pool.set_storage(storage)
     proxy_pool.configure(proxy_url, proxy_pool_url, proxy_pool_interval)
     
     # 3. 异步加载 token 数据
@@ -75,6 +77,26 @@ async def lifespan(app: FastAPI):
     
     # 4. 启动批量保存任务
     await token_manager.start_batch_save()
+
+    # 4.1. 启动Token状态刷新任务
+    await token_manager.start_status_refresh()
+    
+    # 4.5. 启动调用日志服务
+    log_max_count = setting.global_config.get("log_max_count", 10000)
+    call_log_service.set_max_logs(log_max_count)
+    await call_log_service.start()
+    logger.info("[Grok2API] 调用日志服务启动完成")
+    
+    # 4.6. 初始化多代理
+    proxy_urls = setting.grok_config.get("proxy_urls", [])
+    for p_url in proxy_urls:
+        if p_url:
+            proxy_pool.add_proxy(p_url)
+    if proxy_urls:
+        logger.info(f"[Grok2API] 加载 {len(proxy_urls)} 个代理")
+
+    # 4.7. 恢复代理绑定状态
+    await proxy_pool.load_state()
 
     # 5. 管理MCP服务的生命周期
     mcp_lifespan_context = mcp_app.lifespan(app)
@@ -98,6 +120,10 @@ async def lifespan(app: FastAPI):
         await token_manager.shutdown()
         logger.info("[Token] Token管理器已关闭")
         
+        # 3.5. 关闭调用日志服务
+        await call_log_service.shutdown()
+        logger.info("[CallLog] 调用日志服务已关闭")
+        
         # 4. 关闭核心服务
         await storage_manager.close()
         logger.info("[Grok2API] 应用关闭成功")
@@ -109,8 +135,8 @@ logger.info("[Grok2API] 应用正在启动...")
 # 创建FastAPI应用
 app = FastAPI(
     title="Grok2API",
-    description="Grok API 转换服务",
-    version="1.3.1",
+    description="Grok2API（OpenAI 兼容接口）：将 Grok Web 调用适配为 OpenAI 风格 API，支持流式对话、图片/视频生成与缓存、代理池与 SSO 绑定、号池并发与自动负载均衡。",
+    version="1.4.0",
     lifespan=lifespan
 )
 
@@ -130,7 +156,8 @@ app.mount("/static", StaticFiles(directory="app/template"), name="template")
 async def root():
     """根路径"""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/login")
+    # 管理后台会在无会话时自动跳转 /login
+    return RedirectResponse(url="/manage")
 
 
 @app.get("/health")

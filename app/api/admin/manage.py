@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.core.config import setting
 from app.core.logger import logger
 from app.services.grok.token import token_manager
+from app.services.call_log import call_log_service
 from app.models.grok_models import TokenType
 
 
@@ -58,6 +59,8 @@ class TokenInfo(BaseModel):
     created_time: Optional[int] = None
     remaining_queries: int
     heavy_remaining_queries: int
+    video_remaining: int = -1
+    video_limit: int = -1
     status: str
     tags: List[str] = []
     note: str = ""
@@ -95,12 +98,13 @@ class TestTokenRequest(BaseModel):
 
 def validate_token_type(token_type_str: str) -> TokenType:
     """验证Token类型"""
-    if token_type_str not in ["sso", "ssoSuper"]:
+    # 兼容 ssoNormal（等同于 sso）
+    if token_type_str not in ["sso", "ssoNormal", "ssoSuper"]:
         raise HTTPException(
             status_code=400,
             detail={"error": "无效的Token类型", "code": "INVALID_TYPE"}
         )
-    return TokenType.NORMAL if token_type_str == "sso" else TokenType.SUPER
+    return TokenType.NORMAL if token_type_str in ["sso", "ssoNormal"] else TokenType.SUPER
 
 
 def parse_created_time(created_time) -> Optional[int]:
@@ -193,6 +197,19 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_mb:.1f} MB"
 
 
+def _resolve_full_sso(log) -> Optional[str]:
+    """解析完整的SSO token（从token_manager中查找）"""
+    if not log.sso:
+        return None
+    # 日志中存储的是截断的SSO，尝试匹配完整的
+    all_tokens = token_manager.get_tokens()
+    for token_type_data in all_tokens.values():
+        for full_token in token_type_data.keys():
+            if full_token.startswith(log.sso) or log.sso in full_token:
+                return full_token
+    return None
+
+
 # === 页面路由 ===
 
 @router.get("/login", response_class=HTMLResponse)
@@ -275,6 +292,8 @@ async def list_tokens(_: bool = Depends(verify_admin_session)) -> TokenListRespo
                 created_time=parse_created_time(data.get("createdTime")),
                 remaining_queries=data.get("remainingQueries", -1),
                 heavy_remaining_queries=data.get("heavyremainingQueries", -1),
+                video_remaining=data.get("videoRemaining", -1),
+                video_limit=data.get("videoLimit", -1),
                 status=get_token_status(data, "sso"),
                 tags=data.get("tags", []),
                 note=data.get("note", "")
@@ -288,6 +307,8 @@ async def list_tokens(_: bool = Depends(verify_admin_session)) -> TokenListRespo
                 created_time=parse_created_time(data.get("createdTime")),
                 remaining_queries=data.get("remainingQueries", -1),
                 heavy_remaining_queries=data.get("heavyremainingQueries", -1),
+                video_remaining=data.get("videoRemaining", -1),
+                video_limit=data.get("videoLimit", -1),
                 status=get_token_status(data, "ssoSuper"),
                 tags=data.get("tags", []),
                 note=data.get("note", "")
@@ -493,9 +514,20 @@ async def get_stats(_: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
         normal_stats = calculate_token_stats(all_tokens.get(TokenType.NORMAL.value, {}), "normal")
         super_stats = calculate_token_stats(all_tokens.get(TokenType.SUPER.value, {}), "super")
         total = normal_stats["total"] + super_stats["total"]
+        
+        # 计算视频统计
+        video_stats = {"total_remaining": 0, "total_limit": 0, "tokens_with_video": 0}
+        for token_type_data in all_tokens.values():
+            for token_data in token_type_data.values():
+                video_remaining = token_data.get("videoRemaining", -1)
+                video_limit = token_data.get("videoLimit", -1)
+                if video_remaining >= 0 and video_limit > 0:
+                    video_stats["total_remaining"] += video_remaining
+                    video_stats["total_limit"] += video_limit
+                    video_stats["tokens_with_video"] += 1
 
         logger.debug(f"[Admin] 统计信息获取成功 - 普通Token: {normal_stats['total']}, Super Token: {super_stats['total']}, 总计: {total}")
-        return {"success": True, "data": {"normal": normal_stats, "super": super_stats, "total": total}}
+        return {"success": True, "data": {"normal": normal_stats, "super": super_stats, "total": total, "video": video_stats}}
 
     except Exception as e:
         logger.error(f"[Admin] 获取统计信息异常: {e}")
