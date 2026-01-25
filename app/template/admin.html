@@ -234,7 +234,7 @@
     <div class="mx-auto flex h-14 max-w-7xl items-center px-6">
       <div class="mr-4 flex items-baseline gap-3">
         <span class="font-bold text-xl">Grok2API</span>
-        <span class="text-xs text-gray-400">by @Chenyme</span>
+        <span class="text-xs text-gray-400">by @miuzhaii</span>
       </div>
       <div class="flex flex-1 items-center justify-end">
         <div class="flex items-center gap-2">
@@ -254,7 +254,7 @@
             </div>
           </div>
           <nav class="flex items-center gap-1">
-            <a href="https://github.com/chenyme/grok2api/issues" target="_blank"
+            <a href="https://github.com/miuzhaii/grok2api-pro/issues" target="_blank"
               class="inline-flex items-center justify-center text-xs transition-colors hover:bg-accent hover:text-accent-foreground h-7 px-2.5 gap-1">
               <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2">
@@ -283,8 +283,12 @@
       <nav class="flex space-x-8">
         <button onclick="switchTab('tokens')" id="tabTokens"
           class="tab-btn border-b-2 border-primary text-sm font-medium py-3 px-1">Token 管理</button>
+        <button onclick="switchTab('logs')" id="tabLogs"
+          class="tab-btn border-b-2 border-transparent text-sm font-medium py-3 px-1 text-muted-foreground">调用日志</button>
+        <button onclick="switchTab('proxies')" id="tabProxies"
+          class="tab-btn border-b-2 border-transparent text-sm font-medium py-3 px-1 text-muted-foreground">代理管理</button>
         <button onclick="switchTab('settings')" id="tabSettings"
-          class="tab-btn border-b-2 border-transparent text-sm font-medium py-3 px-1">Setting 配置</button>
+          class="tab-btn border-b-2 border-transparent text-sm font-medium py-3 px-1 text-muted-foreground">Setting 配置</button>
       </nav>
     </div>
 
@@ -338,7 +342,7 @@
         <!-- 工具栏 -->
         <div class="flex items-center justify-between gap-4 p-4 border-b border-border">
           <div class="flex items-center gap-3 flex-1">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <select id="filterType" onchange="filterTokens()"
                 class="h-8 px-1 text-sm rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[90px]">
                 <option value="all">全部类型</option>
@@ -360,7 +364,7 @@
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <button onclick="refreshTokens()" class="btn-icon" title="刷新列表">
               <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2">
@@ -437,6 +441,16 @@
             <path d="M9 9h6v6H9z" />
           </svg>
           <p class="text-sm text-muted-foreground">暂无数据</p>
+        </div>
+        <div class="flex items-center justify-between p-4 border-t border-border">
+          <div class="text-sm text-muted-foreground">
+            共 <span id="tokenTotalCount">0</span> 条记录
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="tokenPrevPage()" id="tokenPrevBtn" disabled class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">上一页</button>
+            <span class="text-sm">第 <span id="tokenCurrentPage">1</span> 页</span>
+            <button onclick="tokenNextPage()" id="tokenNextBtn" class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">下一页</button>
+          </div>
         </div>
       </div>
     </div>
@@ -567,6 +581,44 @@
                     </svg>
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Token状态刷新 -->
+          <div class="rounded-lg border border-border bg-background p-6">
+            <h3 class="text-sm font-semibold mb-4">Token 状态刷新</h3>
+            <div class="space-y-4">
+              <div>
+                <label class="cfg-label">
+                  刷新间隔 (分钟)
+                  <span class="help-icon" title="定时检查Token状态，0表示关闭">?</span>
+                </label>
+                <input id="cfgTokenRefreshInterval" type="number" class="cfg-input" placeholder="60">
+              </div>
+              <div>
+                <label class="cfg-label">
+                  未使用 Token 默认 Chat 配额
+                  <span class="help-icon" title="用于主页统计：当Token显示“未使用/未拉取到配额(remaining=-1)”时，按该值估算剩余次数；0表示不估算">?</span>
+                </label>
+                <input id="cfgAssumedChatQuota" type="number" class="cfg-input" placeholder="80">
+              </div>
+              <div>
+                <label class="cfg-label">
+                  刷新范围
+                  <span class="help-icon" title="仅失效：只刷新已失效Token | 全部：刷新全部Token">?</span>
+                </label>
+                <select id="cfgTokenRefreshScope" class="cfg-input">
+                  <option value="expired">仅失效</option>
+                  <option value="all">全部</option>
+                </select>
+              </div>
+              <div>
+                <label class="cfg-label">
+                  连续 0 次失效阈值
+                  <span class="help-icon" title="连续检测到0次数达到该阈值后标记失效">?</span>
+                </label>
+                <input id="cfgTokenZeroExpireThreshold" type="number" class="cfg-input" placeholder="3">
               </div>
             </div>
           </div>
@@ -743,6 +795,209 @@
         </div>
       </div>
     </div>
+
+    <!-- 调用日志面板 -->
+    <div id="panelLogs" class="hidden">
+      <!-- 日志统计卡片 -->
+      <div class="grid gap-4 grid-cols-2 md:grid-cols-5 mb-6">
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">总调用次数</p>
+          <h3 class="text-xl font-bold" id="logStatTotal">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">今日调用次数</p>
+          <h3 class="text-xl font-bold" id="logStatToday">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">成功次数</p>
+          <h3 class="text-xl font-bold text-green-600" id="logStatSuccess">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">失败次数</p>
+          <h3 class="text-xl font-bold text-destructive" id="logStatFailed">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">成功率</p>
+          <h3 class="text-xl font-bold text-blue-600" id="logStatRate">-</h3>
+        </div>
+      </div>
+
+      <!-- 日志列表 -->
+      <div class="rounded-lg border border-border bg-background">
+        <!-- 工具栏 -->
+        <div class="flex items-center justify-between gap-4 p-4 border-b border-border">
+          <div class="flex items-center gap-3 flex-1 flex-wrap">
+            <input id="logFilterSso" placeholder="SSO筛选..." class="h-8 px-3 text-sm rounded-md border border-input bg-background w-32">
+            <select id="logFilterSuccess" class="h-8 px-2 text-sm rounded-md bg-background border border-input">
+              <option value="">全部状态</option>
+              <option value="true">成功</option>
+              <option value="false">失败</option>
+            </select>
+            <select id="logFilterModel" class="h-8 px-2 text-sm rounded-md bg-background border border-input">
+              <option value="">全部模型</option>
+              <option value="grok-4-fast">grok-4-fast</option>
+              <option value="grok-4-heavy">grok-4-heavy</option>
+              <option value="grok-3-fast">grok-3-fast</option>
+            </select>
+            <input id="logFilterStart" type="datetime-local" class="h-8 px-2 text-sm rounded-md border border-input bg-background" title="默认：昨日00点（服务器时间）">
+            <input id="logFilterEnd" type="datetime-local" class="h-8 px-2 text-sm rounded-md border border-input bg-background" title="默认：现在（服务器时间）">
+            <button onclick="loadLogs()" class="h-8 px-3 text-sm rounded-md bg-secondary hover:bg-accent">筛选</button>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button onclick="loadLogs()" class="btn-icon" title="刷新">
+              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+            <button onclick="clearLogs()" class="btn-icon hover:bg-destructive/10 hover:text-destructive" title="清空日志">
+              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 表格 -->
+        <div class="relative w-full overflow-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">时间</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">SSO</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">模型</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">状态</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">状态码</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">响应时间</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">代理</th>
+                <th class="h-10 px-3 text-left align-middle text-sm font-medium text-muted-foreground">错误信息</th>
+              </tr>
+            </thead>
+            <tbody id="logTableBody" class="divide-y divide-border"></tbody>
+          </table>
+        </div>
+
+        <!-- 分页 -->
+        <div class="flex items-center justify-between p-4 border-t border-border">
+          <div class="text-sm text-muted-foreground">
+            共 <span id="logTotalCount">0</span> 条记录
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="logPrevPage()" id="logPrevBtn" disabled class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">上一页</button>
+            <span class="text-sm">第 <span id="logCurrentPage">1</span> 页</span>
+            <button onclick="logNextPage()" id="logNextBtn" class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">下一页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 代理管理面板 -->
+    <div id="panelProxies" class="hidden">
+      <!-- 代理统计卡片 -->
+      <div class="grid gap-4 grid-cols-2 md:grid-cols-4 mb-6">
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">代理总数</p>
+          <h3 class="text-xl font-bold" id="proxyStatTotal">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">健康代理</p>
+          <h3 class="text-xl font-bold text-green-600" id="proxyStatHealthy">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">不健康代理</p>
+          <h3 class="text-xl font-bold text-destructive" id="proxyStatUnhealthy">-</h3>
+        </div>
+        <div class="rounded-lg border border-border bg-background p-4">
+          <p class="text-sm font-medium text-muted-foreground mb-2">SSO绑定数</p>
+          <h3 class="text-xl font-bold text-blue-600" id="proxyStatAssigned">-</h3>
+        </div>
+      </div>
+
+      <div class="grid gap-6 lg:grid-cols-2">
+        <!-- 代理列表 -->
+        <div class="rounded-lg border border-border bg-background">
+          <div class="flex items-center justify-between p-4 border-b border-border flex-wrap gap-2">
+            <h3 class="text-sm font-semibold">代理列表</h3>
+            <div class="flex items-center gap-2">
+              <button onclick="openBatchProxyModal()" class="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-8 px-3 text-sm">
+                批量导入
+              </button>
+              <button onclick="openAddProxyModal()" class="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3 text-sm">
+                <svg class="h-4 w-4 mr-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                添加代理
+              </button>
+            </div>
+          </div>
+          <div class="p-4 space-y-3" id="proxyList">
+            <div class="text-sm text-muted-foreground text-center py-8">暂无代理</div>
+          </div>
+          <div class="flex items-center justify-between p-4 border-t border-border">
+            <button onclick="proxyPrevPage()" id="proxyPrevBtn" disabled class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">上一页</button>
+            <span class="text-sm text-muted-foreground">页码 <span id="proxyPageInfo">1/1</span></span>
+            <button onclick="proxyNextPage()" id="proxyNextBtn" class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">下一页</button>
+          </div>
+        </div>
+
+        <!-- SSO绑定管理 -->
+        <div class="rounded-lg border border-border bg-background">
+          <div class="flex items-center justify-between p-4 border-b border-border flex-wrap gap-2">
+            <h3 class="text-sm font-semibold">SSO绑定</h3>
+          </div>
+          <div class="p-4">
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm font-medium text-muted-foreground mb-2 block">选择代理</label>
+                <select id="assignProxySelect" class="h-9 w-full px-3 text-sm rounded-md border border-input bg-background">
+                  <option value="">请选择代理</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-sm font-medium text-muted-foreground mb-2 block">SSO Token</label>
+                <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                  <div class="text-xs text-muted-foreground">仅显示有效且未绑定的Token</div>
+                  <div class="flex items-center gap-2">
+                    <button onclick="selectAllSsoOptions()" class="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-7 px-2 text-xs">全选</button>
+                    <button onclick="clearSsoOptions()" class="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-7 px-2 text-xs">清空</button>
+                  </div>
+                </div>
+                <div id="assignSsoList" class="max-h-56 overflow-auto border border-input rounded-md p-2 space-y-2 bg-background text-sm">
+                  <div class="text-xs text-muted-foreground">暂无可绑定的Token</div>
+                </div>
+                <div class="flex items-center justify-between mt-2">
+                  <button onclick="ssoPrevPage()" id="ssoPrevBtn" disabled class="h-7 px-2 text-xs rounded-md border border-input bg-background disabled:opacity-50">上一页</button>
+                  <span class="text-xs text-muted-foreground">页码 <span id="ssoPageInfo">1/1</span></span>
+                  <button onclick="ssoNextPage()" id="ssoNextBtn" class="h-7 px-2 text-xs rounded-md border border-input bg-background disabled:opacity-50">下一页</button>
+                </div>
+              </div>
+              <button onclick="assignProxy()" class="w-full h-9 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 text-sm">绑定</button>
+            </div>
+
+            <div class="mt-6">
+              <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+                <h4 class="text-sm font-medium text-muted-foreground">当前绑定</h4>
+                <div class="flex items-center gap-2">
+                  <input id="assignmentSearchInput" placeholder="搜索已绑定SSO(支持模糊)"
+                    class="h-8 w-52 px-2 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring" />
+                  <button onclick="applyAssignmentSearch()" class="h-8 px-3 text-xs rounded-md border border-input bg-background hover:bg-accent">搜索</button>
+                  <button onclick="clearAssignmentSearch()" class="h-8 px-3 text-xs rounded-md border border-input bg-background hover:bg-accent">清除</button>
+                </div>
+              </div>
+              <div id="assignmentList" class="space-y-2">
+                <div class="text-sm text-muted-foreground text-center py-4">暂无绑定</div>
+              </div>
+              <div class="flex items-center justify-between mt-3">
+                <button onclick="assignmentPrevPage()" id="assignmentPrevBtn" disabled class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">上一页</button>
+                <span class="text-sm text-muted-foreground">页码 <span id="assignmentPageInfo">1/1</span></span>
+                <button onclick="assignmentNextPage()" id="assignmentNextBtn" class="h-8 px-3 text-sm rounded-md border border-input bg-background disabled:opacity-50">下一页</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- 编辑信息模态框 -->
@@ -790,6 +1045,116 @@
     </div>
   </div>
 
+  <!-- 添加代理模态框 -->
+  <div id="addProxyModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+    <div class="bg-background rounded-lg border border-border w-full max-w-md shadow-xl">
+      <div class="flex items-center justify-between p-5 border-b border-border">
+        <h3 class="text-lg font-semibold">添加代理</h3>
+        <button onclick="closeAddProxyModal()" class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="space-y-2">
+          <label class="text-sm font-medium text-muted-foreground">代理URL</label>
+          <input id="addProxyUrl" placeholder="socks5h://127.0.0.1:1080 或 http://127.0.0.1:8080" class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+          <p class="text-xs text-muted-foreground">支持 http://, https://, socks5://, socks5h://</p>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
+        <button onclick="closeAddProxyModal()" class="inline-flex items-center justify-center rounded-md text-sm font-medium border border-input bg-background hover:bg-accent h-9 px-5">取消</button>
+        <button onclick="submitAddProxy()" class="inline-flex items-center justify-center rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-5">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 批量导入代理模态框 -->
+  <div id="batchProxyModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+    <div class="bg-background rounded-lg border border-border w-full max-w-lg shadow-xl">
+      <div class="flex items-center justify-between p-5 border-b border-border">
+        <h3 class="text-lg font-semibold">批量导入代理</h3>
+        <button onclick="closeBatchProxyModal()" class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="space-y-2">
+          <label class="text-sm font-medium text-muted-foreground">代理列表 <span class="text-muted-foreground">(一行一个)</span></label>
+          <textarea id="batchProxyList" rows="10" placeholder="socks5h://127.0.0.1:1080&#10;http://127.0.0.1:8080" class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono resize-none"></textarea>
+          <p class="text-xs text-muted-foreground">支持 http://, https://, socks5://, socks5h://</p>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
+        <button onclick="closeBatchProxyModal()" class="inline-flex items-center justify-center rounded-md text-sm font-medium border border-input bg-background hover:bg-accent h-9 px-5">取消</button>
+        <button onclick="submitBatchProxy()" class="inline-flex items-center justify-center rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-5">导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日志详情模态框 -->
+  <div id="logDetailModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+    <div class="bg-background rounded-lg border border-border w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-xl">
+      <div class="flex items-center justify-between p-5 border-b border-border">
+        <h3 class="text-lg font-semibold">日志详情</h3>
+        <button onclick="closeLogDetailModal()" class="text-muted-foreground hover:text-foreground transition-colors">
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-4 text-sm">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div><span class="text-muted-foreground">时间：</span><span id="logDetailTime"></span></div>
+          <div><span class="text-muted-foreground">模型：</span><span id="logDetailModel"></span></div>
+          <div><span class="text-muted-foreground">状态：</span><span id="logDetailStatus"></span></div>
+          <div><span class="text-muted-foreground">状态码：</span><span id="logDetailCode"></span></div>
+          <div><span class="text-muted-foreground">耗时：</span><span id="logDetailTimeCost"></span></div>
+          <div><span class="text-muted-foreground">Token 消耗：</span><span id="logDetailTokens"></span></div>
+          <div class="md:col-span-2"><span class="text-muted-foreground">代理：</span><span id="logDetailProxy" class="font-mono text-xs break-all"></span></div>
+        </div>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="text-muted-foreground">SSO：</span>
+            <div class="flex items-center gap-2">
+              <button onclick="toggleSsoMask()" id="logDetailSsoToggle" class="inline-flex items-center rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent">隐藏</button>
+              <button onclick="copyLogDetail('logDetailSso')" class="inline-flex items-center rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent">复制</button>
+            </div>
+          </div>
+          <div id="logDetailSso" data-full="" data-masked="" data-masked-state="false" class="font-mono text-xs break-all bg-muted/40 border border-border rounded-md p-2"></div>
+        </div>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-muted-foreground">失败日志（完整）：</span>
+            <button onclick="copyLogDetail('logDetailError')" class="inline-flex items-center rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent">复制</button>
+          </div>
+          <pre id="logDetailError" class="text-xs whitespace-pre-wrap break-words font-mono bg-muted/40 border border-border rounded-md p-2"></pre>
+        </div>
+        <div id="logDetailMedia" class="hidden space-y-3">
+          <div class="text-muted-foreground text-sm">生成媒体预览：</div>
+          <div id="logDetailImages" class="grid gap-2 grid-cols-2 md:grid-cols-4"></div>
+          <div id="logDetailVideos" class="space-y-2"></div>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
+        <button onclick="closeLogDetailModal()" class="inline-flex items-center justify-center rounded-md text-sm font-medium border border-input bg-background hover:bg-accent h-9 px-5">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片预览 -->
+  <div id="imagePreviewModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onclick="closeImagePreview()">
+    <div class="relative max-w-5xl w-full" onclick="event.stopPropagation()">
+      <button onclick="closeImagePreview()" class="absolute -top-10 right-0 text-white text-sm">关闭</button>
+      <img id="imagePreview" src="" alt="preview" class="w-full max-h-[80vh] object-contain rounded-lg">
+    </div>
+  </div>
+
   <!-- 添加 Token 模态框 -->
   <div id="addModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
     <div class="bg-background rounded-lg border border-border w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-xl">
@@ -834,27 +1199,117 @@
 
   <script>
     let allTokens = [], filteredTokens = [], selectedTokens = new Set(), allTagsList = [];
+    let tokenPage = 1, tokenPageSize = 10, tokenTotal = 0;
+    let assumedChatQuotaPerToken = 0;
     const $ = (id) => document.getElementById(id),
       checkAuth = () => { const t = localStorage.getItem('adminToken'); return t || (location.href = '/login', null), t },
       apiRequest = async (url, opts = {}) => { const t = checkAuth(); if (!t) return null; const r = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' } }); return r.status === 401 ? (localStorage.removeItem('adminToken'), location.href = '/login', null) : r },
-      loadStats = async () => { try { const r = await apiRequest('/api/stats'); if (!r) return; const d = await r.json(); if (d.success) { const s = d.data; $('statTotal').textContent = s.total || 0;['Unused', 'Limited', 'Expired', 'Active'].forEach((k, i) => $(`stat${k}`).textContent = (s.normal?.[k.toLowerCase()] || 0) + (s.super?.[k.toLowerCase()] || 0)) } } catch (e) { console.error('加载统计失败:', e) } },
-      calcRemaining = () => { let n = 0, h = 0; allTokens.forEach(t => { if (t.remaining_queries > 0) n += t.remaining_queries; if (t.heavy_remaining_queries > 0) h += t.heavy_remaining_queries }); return { normal: n, heavy: h, total: n + h } },
-      loadTokens = async () => { try { const r = await apiRequest('/api/tokens'); if (!r) return; const d = await r.json(); d.success && (allTokens = d.data.map(t => ({ ...t, tags: t.tags || [], note: t.note || '' })), filteredTokens = allTokens, selectedTokens.clear(), renderTokens(), updateRemaining(), await loadAllTags()) } catch (e) { console.error('加载列表失败:', e) } },
-      updateRemaining = () => { const r = calcRemaining(); const chatTotal = r.total; const imageTotal = Math.floor(chatTotal / 2); $('statChatRemaining').textContent = chatTotal === 0 ? '-' : chatTotal.toLocaleString(); $('statImageRemaining').textContent = imageTotal === 0 ? '-' : imageTotal.toLocaleString(); $('statVideoRemaining').textContent = '无法统计' }
+      extractErrorMessage = (d, fallback = '未知错误') => {
+        if (!d) return fallback;
+        if (typeof d === 'string') return d;
+        if (d.error?.message) return d.error.message;
+        if (d.message) return d.message;
+        if (typeof d.error === 'string') return d.error;
+        if (d.error?.detail) return d.error.detail;
+        return fallback;
+      },
+      loadStats = async () => { try { const r = await apiRequest('/api/stats'); if (!r) return; const d = await r.json(); if (d.success) { const s = d.data; $('statTotal').textContent = s.total || 0;['Unused', 'Limited', 'Expired', 'Active'].forEach((k, i) => $(`stat${k}`).textContent = (s.normal?.[k.toLowerCase()] || 0) + (s.super?.[k.toLowerCase()] || 0)); if (s.video) { $('statVideoRemaining').textContent = s.video.total_remaining >= 0 ? s.video.total_remaining : '无法统计' } } } catch (e) { console.error('加载统计失败:', e) } },
+      loadRemainingStats = async () => { try { const r = await apiRequest('/api/stats/remaining'); if (!r) return; const d = await r.json(); if (d.success) { const s = d.data || {}; const chatTotal = s.chat_total_remaining || 0; const imageTotal = s.image_total_remaining || 0; assumedChatQuotaPerToken = typeof s.assumed_chat_quota_per_token === 'number' ? s.assumed_chat_quota_per_token : assumedChatQuotaPerToken; $('statChatRemaining').textContent = chatTotal === 0 ? '-' : chatTotal.toLocaleString(); $('statImageRemaining').textContent = imageTotal === 0 ? '-' : imageTotal.toLocaleString(); if (s.video) $('statVideoRemaining').textContent = s.video.total_remaining >= 0 ? s.video.total_remaining : '无法统计' } } catch (e) { console.error('加载剩余统计失败:', e) } },
+      normalizeTokenStatus = (t) => {
+        if (t.status !== '失效') return t.status;
+        const remaining = typeof t.remaining_queries === 'number' ? t.remaining_queries : -1;
+        const heavyRemaining = typeof t.heavy_remaining_queries === 'number' ? t.heavy_remaining_queries : -1;
+        const relevant = t.token_type === 'ssoSuper' ? Math.max(remaining, heavyRemaining) : remaining;
+        if (relevant === 0) return '限流中';
+        if (relevant > 0) return '正常';
+        return t.status;
+      },
+      formatProxyDisplay = (proxy) => {
+        if (!proxy) return proxy;
+        return proxy.replace(/^socks5h+:\/\//i, 'socks5://');
+      },
+      loadTokens = async () => {
+        try {
+          const tf = $('filterType').value, sf = $('filterStatus').value, tagf = $('filterTag').value;
+          const qs = new URLSearchParams({
+            page: String(tokenPage),
+            page_size: String(tokenPageSize),
+            sort: 'created_desc',
+            ...(tf !== 'all' ? { token_type: tf } : {}),
+            ...(sf !== 'all' ? { status: sf } : {}),
+            ...(tagf !== 'all' ? { tag: tagf } : {})
+          });
+          const r = await apiRequest(`/api/tokens?${qs.toString()}`);
+          if (!r) return;
+          const d = await r.json();
+          if (d.success) {
+            allTokens = d.data.map(t => {
+              const token = { ...t, tags: t.tags || [], note: t.note || '' };
+              token.status = normalizeTokenStatus(token);
+              return token;
+            });
+            filteredTokens = allTokens;
+            selectedTokens.clear();
+            renderTokens();
+            loadRemainingStats();
+            tokenTotal = d.total || 0;
+            $('tokenTotalCount').textContent = tokenTotal;
+            $('tokenCurrentPage').textContent = tokenPage;
+            $('tokenPrevBtn').disabled = tokenPage <= 1;
+            $('tokenNextBtn').disabled = tokenPage * tokenPageSize >= tokenTotal;
+            await loadAllTags();
+          }
+        } catch (e) { console.error('加载列表失败:', e) }
+      },
+      updateRemaining = () => loadRemainingStats()
 
     const renderTokens = () => { const tb = $('tokenTableBody'), es = $('emptyState'), ss = { '未使用': 'bg-muted text-muted-foreground', '限流中': 'bg-orange-50 text-orange-700 border-orange-200', '失效': 'bg-destructive/10 text-destructive border-destructive/20', '正常': 'bg-green-50 text-green-700 border-green-200' }, ts = { sso: 'bg-blue-50 text-blue-700 border-blue-200', ssoSuper: 'bg-purple-50 text-purple-700 border-purple-200' }, tl = { sso: 'SSO', ssoSuper: 'SuperSSO' }; if (!filteredTokens.length) { tb.innerHTML = ''; es.classList.remove('hidden'); $('selectAll').checked = false; return updateBatchActions() } es.classList.add('hidden'); tb.innerHTML = filteredTokens.map(t => { const tagsHtml = t.tags && t.tags.length ? t.tags.map(tag => `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-xs bg-gray-100 text-gray-700">${tag}</span>`).join(' ') : '<span class="text-xs text-muted-foreground">-</span>'; const noteHtml = t.note && t.note.length ? `<span class="text-xs text-gray-700" title="${t.note}">${t.note.length > 20 ? t.note.substring(0, 20) + '...' : t.note}</span>` : '<span class="text-xs text-muted-foreground">-</span>'; return `<tr class="transition-colors"><td class="py-2.5 px-3 align-middle w-12"><input type="checkbox" class="token-checkbox h-3.5 w-3.5 rounded border border-input focus:ring-1 focus:ring-ring" data-token="${t.token}" data-type="${t.token_type}" ${selectedTokens.has(t.token) ? 'checked' : ''} onchange="toggleToken('${t.token}')"></td><td class="py-2.5 px-3 align-middle w-80"><div class="flex items-center gap-2"><span class="font-mono text-xs">${t.token.substring(0, 30)}...</span><button onclick="copyToken('${t.token.replace(/'/g, "\\'")}',event)" class="inline-flex items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring hover:bg-accent h-6 w-6" title="复制完整 Token"><svg class="h-3 w-3 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></td><td class="py-2.5 px-3 align-middle w-20"><span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium border ${ts[t.token_type]}">${tl[t.token_type]}</span></td><td class="py-2.5 px-3 align-middle w-20"><span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium border ${ss[t.status]}">${t.status}</span></td><td class="py-2.5 px-3 align-middle w-20 text-xs tabular-nums">${t.remaining_queries === -1 ? '-' : t.remaining_queries}</td><td class="py-2.5 px-3 align-middle w-20 text-xs tabular-nums">${t.heavy_remaining_queries === -1 ? '-' : t.heavy_remaining_queries}</td><td class="py-2.5 px-3 align-middle w-32"><div class="flex flex-wrap gap-1">${tagsHtml}</div></td><td class="py-2.5 px-3 align-middle w-40">${noteHtml}</td><td class="py-2.5 px-3 align-middle w-32 text-xs text-muted-foreground">${t.created_time ? new Date(t.created_time).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' }) : '-'}</td><td class="py-2.5 px-3 align-middle text-right w-28 sticky-right"><div class="flex items-center justify-end gap-1"><button onclick="testToken('${t.token}','${t.token_type}')" class="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring hover:bg-blue-50 hover:text-blue-700 h-7 w-7" title="测试Token"><svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></button><button onclick="editToken('${t.token}','${t.token_type}')" class="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring hover:bg-accent hover:text-accent-foreground h-7 w-7" title="编辑信息"><svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button><button onclick="deleteToken('${t.token}','${t.token_type}')" class="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring hover:bg-destructive/10 hover:text-destructive h-7 w-7" title="删除"><svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></td></tr>` }).join(''); updateBatchActions() },
       toggleToken = t => selectedTokens[selectedTokens.has(t) ? 'delete' : 'add'](t) || updateBatchActions(),
       toggleSelectAll = () => { const sa = $('selectAll'); sa.checked ? filteredTokens.forEach(t => selectedTokens.add(t.token)) : selectedTokens.clear(); renderTokens() },
       updateBatchActions = () => { const ba = $('batchActions'), sc = $('selectedCount'), c = selectedTokens.size; ba.classList[c > 0 ? 'add' : 'remove']('flex'); ba.classList[c > 0 ? 'remove' : 'add']('hidden'); c > 0 && (sc.textContent = `已选择 ${c} 项`); $('selectAll').checked = filteredTokens.length > 0 && c === filteredTokens.length },
-      filterTokens = () => { const tf = $('filterType').value, sf = $('filterStatus').value, tagf = $('filterTag').value; filteredTokens = allTokens.filter(t => (tf === 'all' || t.token_type === tf) && (sf === 'all' || t.status === sf) && (tagf === 'all' || t.tags && t.tags.includes(tagf))); selectedTokens.clear(); renderTokens() },
+      filterTokens = () => { tokenPage = 1; loadTokens() },
       loadAllTags = async () => { try { const r = await apiRequest('/api/tokens/tags/all'); if (!r) return; const d = await r.json(); if (d.success) { allTagsList = d.data; const tagFilter = $('filterTag'); const currentValue = tagFilter.value; tagFilter.innerHTML = '<option value="all">全部标签</option>' + allTagsList.map(tag => `<option value="${tag}">${tag}</option>`).join(''); tagFilter.value = currentValue } } catch (e) { console.error('加载标签列表失败:', e) } },
       refreshTokens = async () => { await loadTokens(); await loadStats() },
+      tokenPrevPage = () => { if (tokenPage > 1) { tokenPage--; loadTokens() } },
+      tokenNextPage = () => { if (tokenPage * tokenPageSize < tokenTotal) { tokenPage++; loadTokens() } },
       openAddModal = () => $('addModal').classList.remove('hidden'),
       closeAddModal = () => { $('addModal').classList.add('hidden'); $('addTokenList').value = '' },
-      deleteToken = async (t, tt) => { if (!confirm('确定要删除这个 Token 吗?')) return; try { const r = await apiRequest('/api/tokens/delete', { method: 'POST', body: JSON.stringify({ tokens: [t], token_type: tt }) }); if (!r) return; const d = await r.json(); d.success ? await refreshTokens() : showToast('删除失败: ' + (d.error || '未知错误'), 'error') } catch (e) { showToast('删除失败: ' + e.message, 'error') } },
+      deleteToken = async (t, tt) => { if (!confirm('确定要删除这个 Token 吗?')) return; try { const r = await apiRequest('/api/tokens/delete', { method: 'POST', body: JSON.stringify({ tokens: [t], token_type: tt }) }); if (!r) return; const d = await r.json(); d.success ? await refreshTokens() : showToast(`删除失败: ${extractErrorMessage(d)}`, 'error') } catch (e) { showToast('删除失败: ' + e.message, 'error') } },
       batchDelete = async () => { if (!selectedTokens.size || !confirm(`确定要删除选中的 ${selectedTokens.size} 个 Token 吗?此操作不可恢复!`)) return; const tbt = { sso: [], ssoSuper: [] }; document.querySelectorAll('.token-checkbox:checked').forEach(cb => tbt[cb.dataset.type].push(cb.dataset.token)); try { const ps = [];['sso', 'ssoSuper'].forEach(k => tbt[k].length && ps.push(apiRequest('/api/tokens/delete', { method: 'POST', body: JSON.stringify({ tokens: tbt[k], token_type: k }) }))); await Promise.all(ps); await refreshTokens() } catch (e) { showToast('批量删除失败: ' + e.message, 'error') } },
-      submitAddTokens = async () => { const tt = $('addTokenType').value, tks = $('addTokenList').value.split('\n').map(t => t.trim()).filter(t => t); if (!tks.length) return showToast('请输入至少一个 Token', 'error'); try { const r = await apiRequest('/api/tokens/add', { method: 'POST', body: JSON.stringify({ tokens: tks, token_type: tt }) }); if (!r) return; const d = await r.json(); d.success ? (closeAddModal(), await refreshTokens()) : showToast('添加失败: ' + (d.error || '未知错误'), 'error') } catch (e) { showToast('添加失败: ' + e.message, 'error') } },
-      copyToken = async (t, e) => { e.stopPropagation(); try { await navigator.clipboard.writeText(t); showToast('Token 已复制到剪贴板', 'success') } catch (err) { console.error('复制失败:', err); showToast('复制失败,请手动复制', 'error') } }
+      submitAddTokens = async () => { const tt = $('addTokenType').value, tks = $('addTokenList').value.split('\n').map(t => t.trim()).filter(t => t); if (!tks.length) return showToast('请输入至少一个 Token', 'error'); try { const r = await apiRequest('/api/tokens/add', { method: 'POST', body: JSON.stringify({ tokens: tks, token_type: tt }) }); if (!r) return; const d = await r.json(); d.success ? (closeAddModal(), await refreshTokens()) : showToast(`添加失败: ${extractErrorMessage(d)}`, 'error') } catch (e) { showToast('添加失败: ' + e.message, 'error') } },
+      copyToken = async (t, e) => { e.stopPropagation(); const ok = await copyText(t); ok ? showToast('Token 已复制到剪贴板', 'success') : showToast('复制失败,请手动复制', 'error') },
+      copyText = async (text) => {
+        if (!text) return false;
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch (err) {
+          console.warn('Clipboard API 失败，降级', err);
+        }
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          return ok;
+        } catch (err) {
+          console.error('复制失败:', err);
+          return false;
+        }
+      },
+      copyLogDetail = async (id) => {
+        const el = $(id);
+        if (!el) return;
+        const ok = await copyText(el.textContent || '');
+        ok ? showToast('已复制到剪贴板', 'success') : showToast('复制失败,请手动复制', 'error');
+      }
 
     let currentEditToken = '', currentEditTokenType = '';
     editToken = (token, tokenType) => { currentEditToken = token; currentEditTokenType = tokenType; const tokenData = allTokens.find(t => t.token === token); const currentTags = tokenData?.tags || []; const currentNote = tokenData?.note || ''; $('editTokenInput').value = token.substring(0, 50) + '...'; $('editTagsInput').value = currentTags.join(', '); $('editNoteInput').value = currentNote; const suggestedContainer = $('suggestedTags'); suggestedContainer.innerHTML = ''; if (allTagsList.length > 0) { suggestedContainer.innerHTML = '<div class="text-xs text-muted-foreground mb-1">常用标签:</div>' + allTagsList.map(tag => `<button onclick="addTagToInput('${tag}')" class="inline-flex items-center rounded px-2 py-1 text-xs bg-muted hover:bg-accent transition-colors">${tag}</button>`).join('') } $('editTagsModal').classList.remove('hidden') },
@@ -867,20 +1322,333 @@
     const exportSelected = () => { if (!selectedTokens.size) return showToast('请先选择要导出的 Token', 'error'); const sd = allTokens.filter(t => selectedTokens.has(t.token)), csv = [['Token', '类型', '状态', '普通调用剩余', '高级调用剩余', '创建时间'].join(','), ...sd.map(t => [`"${t.token}"`, t.token_type === 'sso' ? 'SSO' : 'SuperSSO', t.status, t.remaining_queries === -1 ? '未使用' : t.remaining_queries, t.heavy_remaining_queries === -1 ? '未使用' : t.heavy_remaining_queries, `"${t.created_time ? new Date(t.created_time).toLocaleString('zh-CN') : '-'}"`].join(','))].join('\n'), l = document.createElement('a'); l.href = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })); l.download = `grok_tokens_${new Date().toISOString().slice(0, 10)}.csv`; l.style.display = 'none'; document.body.appendChild(l); l.click(); document.body.removeChild(l); URL.revokeObjectURL(l.href); showToast(`已导出 ${selectedTokens.size} 个 Token`, 'success') }
     showToast = (m, t = 'info') => { const d = document.createElement('div'), bc = { success: 'bg-green-600', error: 'bg-destructive', info: 'bg-primary' }; d.className = `fixed bottom-4 right-4 ${bc[t] || bc.info} text-white px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium z-50 animate-slide-up`; d.textContent = m; document.body.appendChild(d); setTimeout(() => { d.style.opacity = '0'; d.style.transition = 'opacity .3s'; setTimeout(() => d.parentNode && document.body.removeChild(d), 300) }, 2000) }
     logout = async () => { if (!confirm('确定要退出登录吗?')) return; try { await apiRequest('/api/logout', { method: 'POST' }) } catch (e) { console.error('登出失败:', e) } finally { localStorage.removeItem('adminToken'); location.href = '/login' } },
-      switchTab = t => { const cap = n => n.charAt(0).toUpperCase() + n.slice(1);['tokens', 'settings'].forEach(n => { const active = n === t; $(`panel${cap(n)}`).classList.toggle('hidden', !active); $(`tab${cap(n)}`).classList.toggle('border-primary', active); $(`tab${cap(n)}`).classList.toggle('text-primary', active); $(`tab${cap(n)}`).classList.toggle('border-transparent', !active); $(`tab${cap(n)}`).classList.toggle('text-muted-foreground', !active) }); t === 'settings' && loadSettings() },
+      switchTab = t => { const cap = n => n.charAt(0).toUpperCase() + n.slice(1);['tokens', 'logs', 'proxies', 'settings'].forEach(n => { const active = n === t; $(`panel${cap(n)}`).classList.toggle('hidden', !active); $(`tab${cap(n)}`).classList.toggle('border-primary', active); $(`tab${cap(n)}`).classList.toggle('text-primary', active); $(`tab${cap(n)}`).classList.toggle('border-transparent', !active); $(`tab${cap(n)}`).classList.toggle('text-muted-foreground', !active) }); if (t === 'settings') loadSettings(); if (t === 'logs') loadLogs(); if (t === 'proxies') loadProxies() },
       updateCacheProxyReadonly = () => { const proxyUrl = $('cfgProxyUrl').value.trim(), cacheProxyInput = $('cfgCacheProxyUrl'); if (proxyUrl) { cacheProxyInput.readOnly = false; cacheProxyInput.classList.remove('bg-muted'); cacheProxyInput.placeholder = 'socks5://username:password@127.0.0.1:7890' } else { cacheProxyInput.readOnly = true; cacheProxyInput.classList.add('bg-muted'); cacheProxyInput.value = ''; cacheProxyInput.placeholder = '设置服务代理后自动启用' } },
       updateStatsigIdState = () => { const dynamicToggle = $('cfgDynamicStatsig'), statsigInput = $('cfgStatsigId'); if (dynamicToggle.checked) { statsigInput.disabled = true; statsigInput.classList.add('bg-muted', 'text-muted-foreground'); statsigInput.placeholder = '已启用动态生成' } else { statsigInput.disabled = false; statsigInput.classList.remove('bg-muted', 'text-muted-foreground'); statsigInput.placeholder = '' } },
-      loadSettings = async () => { try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (d.success) { const g = d.data.global, k = d.data.grok; const cfClearance = k.cf_clearance || ''; const cleanCfDisplay = cfClearance.startsWith('cf_clearance=') ? cfClearance.split('cf_clearance=')[1] : cfClearance; $('cfgAdminUser').value = g.admin_username || ''; $('cfgAdminPass').value = ''; $('cfgLogLevel').value = g.log_level || 'DEBUG'; $('cfgImageCacheMaxSize').value = g.image_cache_max_size_mb || 500; $('cfgVideoCacheMaxSize').value = g.video_cache_max_size_mb || 1000; $('cfgImageMode').value = g.image_mode || 'url'; $('cfgBaseUrl').value = g.base_url || ''; $('cfgApiKey').value = k.api_key || ''; $('cfgProxyUrl').value = k.proxy_url || ''; $('cfgProxyPoolUrl').value = k.proxy_pool_url || ''; $('cfgProxyPoolInterval').value = k.proxy_pool_interval || 300; $('cfgCacheProxyUrl').value = k.cache_proxy_url || ''; $('cfgCfClearance').value = cleanCfDisplay; $('cfgStatsigId').value = k.x_statsig_id || ''; $('cfgDynamicStatsig').checked = k.dynamic_statsig !== false; updateStatsigIdState(); $('cfgFilteredTags').value = k.filtered_tags || ''; $('cfgShowThinking').value = k.show_thinking !== false ? 'true' : 'false'; $('cfgTemporary').value = k.temporary !== false ? 'true' : 'false'; $('cfgStreamChunkTimeout').value = k.stream_chunk_timeout || 120; $('cfgStreamFirstResponseTimeout').value = k.stream_first_response_timeout || 30; $('cfgStreamTotalTimeout').value = k.stream_total_timeout || 600; $('cfgRetryStatusCodes').value = (k.retry_status_codes || [401, 429]).join(','); updateCacheProxyReadonly(); await loadCacheSize() } } catch (e) { console.error('加载配置失败:', e); showToast('加载配置失败', 'error') } },
+      loadSettings = async () => { try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (d.success) { const g = d.data.global, k = d.data.grok; const cfClearance = k.cf_clearance || ''; const cleanCfDisplay = cfClearance.startsWith('cf_clearance=') ? cfClearance.split('cf_clearance=')[1] : cfClearance; const refreshInterval = typeof g.token_refresh_interval === 'number' ? g.token_refresh_interval : 3600; assumedChatQuotaPerToken = typeof g.assumed_chat_quota_per_token === 'number' ? g.assumed_chat_quota_per_token : 80; $('cfgAdminUser').value = g.admin_username || ''; $('cfgAdminPass').value = ''; $('cfgLogLevel').value = g.log_level || 'DEBUG'; $('cfgImageCacheMaxSize').value = g.image_cache_max_size_mb || 500; $('cfgVideoCacheMaxSize').value = g.video_cache_max_size_mb || 1000; $('cfgImageMode').value = g.image_mode || 'url'; $('cfgBaseUrl').value = g.base_url || ''; $('cfgTokenRefreshInterval').value = refreshInterval > 0 ? Math.round(refreshInterval / 60) : 0; $('cfgAssumedChatQuota').value = assumedChatQuotaPerToken; $('cfgTokenRefreshScope').value = g.token_refresh_scope || 'expired'; $('cfgTokenZeroExpireThreshold').value = g.token_zero_expire_threshold || 3; $('cfgApiKey').value = k.api_key || ''; $('cfgProxyUrl').value = k.proxy_url || ''; $('cfgProxyPoolUrl').value = k.proxy_pool_url || ''; $('cfgProxyPoolInterval').value = k.proxy_pool_interval || 300; $('cfgCacheProxyUrl').value = k.cache_proxy_url || ''; $('cfgCfClearance').value = cleanCfDisplay; $('cfgStatsigId').value = k.x_statsig_id || ''; $('cfgDynamicStatsig').checked = k.dynamic_statsig !== false; updateStatsigIdState(); $('cfgFilteredTags').value = k.filtered_tags || ''; $('cfgShowThinking').value = k.show_thinking !== false ? 'true' : 'false'; $('cfgTemporary').value = k.temporary !== false ? 'true' : 'false'; $('cfgStreamChunkTimeout').value = k.stream_chunk_timeout || 120; $('cfgStreamFirstResponseTimeout').value = k.stream_first_response_timeout || 30; $('cfgStreamTotalTimeout').value = k.stream_total_timeout || 600; $('cfgRetryStatusCodes').value = (k.retry_status_codes || [401, 429]).join(','); updateCacheProxyReadonly(); await loadCacheSize(); loadRemainingStats() } } catch (e) { console.error('加载配置失败:', e); showToast('加载配置失败', 'error') } },
       loadCacheSize = async () => { try { const r = await apiRequest('/api/cache/size'); if (!r) return; const d = await r.json(); if (d.success) { ['image', 'video', 'total'].forEach(t => $(`${t}CacheSize`).value = d.data[`${t}_size`] || '0 MB') } } catch (e) { console.error('加载缓存大小失败:', e);['image', 'video', 'total'].forEach(t => $(`${t}CacheSize`).value = '0 MB') } },
-      clearCacheByType = async (type, url, msg) => { if (!confirm(msg)) return; try { const r = await apiRequest(url, { method: 'POST' }); if (!r) return; const d = await r.json(); d.success ? (showToast(`${type}缓存清理完成，已删除 ${d.data.deleted_count || 0} 个文件`, 'success'), await loadCacheSize()) : showToast('清理失败: ' + (d.error || '未知错误'), 'error') } catch (e) { showToast('清理失败: ' + e.message, 'error') } },
+      clearCacheByType = async (type, url, msg) => { if (!confirm(msg)) return; try { const r = await apiRequest(url, { method: 'POST' }); if (!r) return; const d = await r.json(); d.success ? (showToast(`${type}缓存清理完成，已删除 ${d.data.deleted_count || 0} 个文件`, 'success'), await loadCacheSize()) : showToast(`清理失败: ${extractErrorMessage(d)}`, 'error') } catch (e) { showToast('清理失败: ' + e.message, 'error') } },
       clearImageCache = () => clearCacheByType('图片', '/api/cache/clear/images', '确定要清理图片缓存吗？此操作将删除所有图片缓存文件！'),
       clearVideoCache = () => clearCacheByType('视频', '/api/cache/clear/videos', '确定要清理视频缓存吗？此操作将删除所有视频缓存文件！'),
       clearCache = () => clearCacheByType('', '/api/cache/clear', '确定要清理缓存吗？此操作将删除 /data/temp 目录中的所有文件！'),
-      saveGlobalSettings = async () => { const gc = { admin_username: $('cfgAdminUser').value, log_level: $('cfgLogLevel').value, image_cache_max_size_mb: parseInt($('cfgImageCacheMaxSize').value) || 500, video_cache_max_size_mb: parseInt($('cfgVideoCacheMaxSize').value) || 1000, image_mode: $('cfgImageMode').value, base_url: $('cfgBaseUrl').value }; if ($('cfgAdminPass').value) gc.admin_password = $('cfgAdminPass').value; try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (!d.success) return showToast('加载配置失败', 'error'); const s = await apiRequest('/api/settings', { method: 'POST', body: JSON.stringify({ global_config: gc, grok_config: d.data.grok }) }); if (!s) return; const sd = await s.json(); sd.success ? (showToast('全局配置保存成功', 'success'), $('cfgAdminPass').value = '') : showToast('保存失败: ' + (sd.error || '未知错误'), 'error') } catch (e) { showToast('保存失败: ' + e.message, 'error') } },
-      saveGrokSettings = async () => { const pu = $('cfgProxyUrl').value.trim(), cf = $('cfgCfClearance').value.trim(); const cleanCf = cf.startsWith('cf_clearance=') ? cf.split('cf_clearance=')[1] : cf; const retryCodesStr = $('cfgRetryStatusCodes').value.trim(); const retryCodes = retryCodesStr ? retryCodesStr.split(',').map(c => parseInt(c.trim())).filter(c => !isNaN(c)) : [401, 429]; const kc = { api_key: $('cfgApiKey').value, proxy_url: pu, proxy_pool_url: $('cfgProxyPoolUrl').value.trim(), proxy_pool_interval: parseInt($('cfgProxyPoolInterval').value) || 300, cache_proxy_url: pu ? $('cfgCacheProxyUrl').value : '', cf_clearance: cleanCf, x_statsig_id: $('cfgStatsigId').value, dynamic_statsig: $('cfgDynamicStatsig').checked, filtered_tags: $('cfgFilteredTags').value, show_thinking: $('cfgShowThinking').value === 'true', temporary: $('cfgTemporary').value === 'true', stream_chunk_timeout: parseInt($('cfgStreamChunkTimeout').value) || 120, stream_first_response_timeout: parseInt($('cfgStreamFirstResponseTimeout').value) || 30, stream_total_timeout: parseInt($('cfgStreamTotalTimeout').value) || 600, retry_status_codes: retryCodes }; try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (!d.success) return showToast('加载配置失败', 'error'); const s = await apiRequest('/api/settings', { method: 'POST', body: JSON.stringify({ global_config: d.data.global, grok_config: kc }) }); if (!s) return; const sd = await s.json(); sd.success ? showToast('Grok配置保存成功', 'success') : showToast('保存失败: ' + (sd.error || '未知错误'), 'error') } catch (e) { showToast('保存失败: ' + e.message, 'error') } };
+      saveGlobalSettings = async () => { const intervalMinutes = parseInt($('cfgTokenRefreshInterval').value); const threshold = parseInt($('cfgTokenZeroExpireThreshold').value); const assumedChat = parseInt($('cfgAssumedChatQuota').value); const gc = { admin_username: $('cfgAdminUser').value, log_level: $('cfgLogLevel').value, image_cache_max_size_mb: parseInt($('cfgImageCacheMaxSize').value) || 500, video_cache_max_size_mb: parseInt($('cfgVideoCacheMaxSize').value) || 1000, image_mode: $('cfgImageMode').value, base_url: $('cfgBaseUrl').value, token_refresh_interval: Number.isFinite(intervalMinutes) ? intervalMinutes * 60 : 3600, assumed_chat_quota_per_token: Number.isFinite(assumedChat) && assumedChat >= 0 ? assumedChat : 80, token_refresh_scope: $('cfgTokenRefreshScope').value, token_zero_expire_threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3 }; if ($('cfgAdminPass').value) gc.admin_password = $('cfgAdminPass').value; try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (!d.success) return showToast('加载配置失败', 'error'); const s = await apiRequest('/api/settings', { method: 'POST', body: JSON.stringify({ global_config: gc, grok_config: d.data.grok }) }); if (!s) return; const sd = await s.json(); sd.success ? (assumedChatQuotaPerToken = gc.assumed_chat_quota_per_token, loadRemainingStats(), showToast('全局配置保存成功', 'success'), $('cfgAdminPass').value = '') : showToast(`保存失败: ${extractErrorMessage(sd)}`, 'error') } catch (e) { showToast('保存失败: ' + e.message, 'error') } },
+      saveGrokSettings = async () => { const pu = $('cfgProxyUrl').value.trim(), cf = $('cfgCfClearance').value.trim(); const cleanCf = cf.startsWith('cf_clearance=') ? cf.split('cf_clearance=')[1] : cf; const retryCodesStr = $('cfgRetryStatusCodes').value.trim(); const retryCodes = retryCodesStr ? retryCodesStr.split(',').map(c => parseInt(c.trim())).filter(c => !isNaN(c)) : [401, 429]; const kc = { api_key: $('cfgApiKey').value, proxy_url: pu, proxy_pool_url: $('cfgProxyPoolUrl').value.trim(), proxy_pool_interval: parseInt($('cfgProxyPoolInterval').value) || 300, cache_proxy_url: pu ? $('cfgCacheProxyUrl').value : '', cf_clearance: cleanCf, x_statsig_id: $('cfgStatsigId').value, dynamic_statsig: $('cfgDynamicStatsig').checked, filtered_tags: $('cfgFilteredTags').value, show_thinking: $('cfgShowThinking').value === 'true', temporary: $('cfgTemporary').value === 'true', stream_chunk_timeout: parseInt($('cfgStreamChunkTimeout').value) || 120, stream_first_response_timeout: parseInt($('cfgStreamFirstResponseTimeout').value) || 30, stream_total_timeout: parseInt($('cfgStreamTotalTimeout').value) || 600, retry_status_codes: retryCodes }; try { const r = await apiRequest('/api/settings'); if (!r) return; const d = await r.json(); if (!d.success) return showToast('加载配置失败', 'error'); const s = await apiRequest('/api/settings', { method: 'POST', body: JSON.stringify({ global_config: d.data.global, grok_config: kc }) }); if (!s) return; const sd = await s.json(); sd.success ? showToast('Grok配置保存成功', 'success') : showToast(`保存失败: ${extractErrorMessage(sd)}`, 'error') } catch (e) { showToast('保存失败: ' + e.message, 'error') } };
     updateHoverCardPosition = c => { const t = c.querySelector('.hover-card-trigger'), ct = c.querySelector('.hover-card-content'); if (!t || !ct) return; const { top, bottom } = t.getBoundingClientRect(), h = window.innerHeight; ct.classList.remove('top', 'bottom'); const { visibility: v, opacity: o } = getComputedStyle(ct); Object.assign(ct.style, { visibility: 'hidden', opacity: '1' }); const ch = ct.offsetHeight; Object.assign(ct.style, { visibility: v, opacity: o }); ct.classList.add(top > ch + 10 ? 'top' : h - bottom > ch + 10 ? 'bottom' : 'top') },
       loadStorageMode = async () => { const modeConfig = { MYSQL: { classes: ['bg-blue-50', 'text-blue-700', 'border-blue-200'], tooltip: '数据库连接模式 - 数据持久化存储，修改配置时可能稍慢但更安全' }, REDIS: { classes: ['bg-purple-50', 'text-purple-700', 'border-purple-200'], tooltip: 'Redis缓存模式 - 高速内存存储，数据持久化且读写性能极佳' }, FILE: { classes: ['bg-green-50', 'text-green-700', 'border-green-200'], tooltip: '文件存储模式 - 本地文件存储，读写速度快' } }; const applyMode = (mode) => { $('storageModeText').textContent = mode; const config = modeConfig[mode] || modeConfig.FILE; $('storageMode').classList.add(...config.classes); $('storageModeTooltip').textContent = config.tooltip; updateHoverCardPosition($('storageMode').closest('.hover-card')) }; try { const r = await apiRequest('/api/storage/mode'); if (!r) return; const d = await r.json(); d.success && applyMode(d.data.mode) } catch (e) { console.error('加载存储模式失败:', e); applyMode('FILE') } };
-    window.addEventListener('DOMContentLoaded', () => { checkAuth(); loadStorageMode(); refreshTokens(); setInterval(() => { loadStats(); updateRemaining() }, 30000); window.addEventListener('resize', () => { const hoverCard = $('storageMode').closest('.hover-card'); hoverCard && updateHoverCardPosition(hoverCard) }); const hoverCard = $('storageMode').closest('.hover-card'), trigger = hoverCard?.querySelector('.hover-card-trigger'), content = hoverCard?.querySelector('.hover-card-content'); if (trigger && content) { trigger.addEventListener('mouseenter', () => { content.style.opacity = '1'; content.style.visibility = 'visible' }); trigger.addEventListener('mouseleave', () => { content.style.opacity = '0'; content.style.visibility = 'hidden' }) }; $('cfgProxyUrl').addEventListener('input', updateCacheProxyReadonly); $('cfgDynamicStatsig').addEventListener('change', updateStatsigIdState) });
+
+    // === 调用日志功能 ===
+    let logPage = 1, logPageSize = 20, logTotal = 0, currentLogs = [], currentLogDetail = null;
+    loadLogs = async () => {
+      try {
+        const sso = $('logFilterSso').value, success = $('logFilterSuccess').value, model = $('logFilterModel').value;
+        const startVal = $('logFilterStart').value, endVal = $('logFilterEnd').value;
+        let url = `/api/logs?page=${logPage}&page_size=${logPageSize}`;
+        if (sso) url += `&sso=${encodeURIComponent(sso)}`;
+        if (success) url += `&success=${success}`;
+        if (model) url += `&model=${encodeURIComponent(model)}`;
+        if (startVal) url += `&start_time=${new Date(startVal).getTime()}`;
+        if (endVal) url += `&end_time=${new Date(endVal).getTime()}`;
+        const r = await apiRequest(url);
+        if (!r) return;
+        const d = await r.json();
+        if (d.success) {
+          logTotal = d.total;
+          $('logTotalCount').textContent = logTotal;
+          $('logCurrentPage').textContent = logPage;
+          $('logPrevBtn').disabled = logPage <= 1;
+          $('logNextBtn').disabled = logPage * logPageSize >= logTotal;
+          renderLogs(d.data);
+          await loadLogStats();
+          await loadLogModelOptions();
+        }
+      } catch (e) { console.error('加载日志失败:', e) }
+    },
+      loadLogModelOptions = async () => {
+        try {
+          const r = await apiRequest('/api/logs/models');
+          if (!r) return;
+          const d = await r.json();
+          if (d.success) updateLogModelOptions(d.data);
+        } catch (e) { console.error('加载模型列表失败:', e) }
+      },
+      loadLogStats = async () => {
+        try {
+          const r = await apiRequest('/api/logs/stats');
+          if (!r) return;
+          const d = await r.json();
+          if (d.success) {
+            const s = d.data;
+            $('logStatTotal').textContent = s.total || 0;
+            $('logStatToday').textContent = s.today_total || 0;
+            $('logStatSuccess').textContent = s.success || 0;
+            $('logStatFailed').textContent = s.failed || 0;
+            $('logStatRate').textContent = (s.success_rate || 0) + '%';
+          }
+        } catch (e) { console.error('加载日志统计失败:', e) }
+      },
+      renderLogs = (logs) => {
+        const tb = $('logTableBody');
+        currentLogs = logs || [];
+        if (!currentLogs.length) {
+          tb.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-muted-foreground">暂无日志</td></tr>';
+          return;
+        }
+        tb.innerHTML = currentLogs.map((l, i) => { const pd = formatProxyDisplay(l.proxy_used || ''); return `<tr class="hover:bg-muted/50 cursor-pointer" onclick="openLogDetail(${i})"><td class="py-2 px-3 text-xs">${new Date(l.timestamp).toLocaleString('zh-CN')}</td><td class="py-2 px-3 text-xs font-mono">${l.sso || '-'}</td><td class="py-2 px-3 text-xs">${l.model || '-'}</td><td class="py-2 px-3"><span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium ${l.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}">${l.success ? '成功' : '失败'}</span></td><td class="py-2 px-3 text-xs">${l.status_code || '-'}</td><td class="py-2 px-3 text-xs">${l.response_time ? l.response_time.toFixed(2) + 's' : '-'}</td><td class="py-2 px-3 text-xs font-mono truncate max-w-32" title="${pd}">${pd ? pd.substring(0, 20) + '...' : '-'}</td><td class="py-2 px-3 text-xs text-red-600 truncate max-w-40" title="${l.error_message || ''}">${l.error_message || '-'}</td></tr>` }).join('');
+        updateLogModelOptions(currentLogs);
+      },
+      openLogDetail = (idx) => {
+        const l = currentLogs[idx];
+        if (!l) return;
+        currentLogDetail = l;
+        $('logDetailTime').textContent = new Date(l.timestamp).toLocaleString('zh-CN');
+        $('logDetailModel').textContent = l.model || '-';
+        $('logDetailStatus').textContent = l.success ? '成功' : '失败';
+        $('logDetailCode').textContent = l.status_code || '-';
+        $('logDetailTimeCost').textContent = l.response_time ? l.response_time.toFixed(2) + 's' : '-';
+        $('logDetailTokens').textContent = l.token_consumed ?? '-';
+        const proxyEl = $('logDetailProxy');
+        const proxyFull = formatProxyDisplay(l.proxy_used || '-');
+        proxyEl.dataset.full = proxyFull;
+        if (proxyFull && proxyFull !== '-' && proxyFull.includes('://')) {
+          const [scheme, rest] = proxyFull.split('://');
+          const maskedRest = rest.length > 8 ? `${rest.slice(0, 4)}****${rest.slice(-4)}` : rest.replace(/.(?=.{2})/g, '*');
+          proxyEl.textContent = `${scheme}://${maskedRest}`;
+        } else {
+          proxyEl.textContent = proxyFull;
+        }
+        const ssoEl = $('logDetailSso');
+        const fullSso = l.sso_full || l.sso || '-';
+        ssoEl.dataset.full = fullSso;
+        const masked = fullSso.length > 12 ? `${fullSso.slice(0, 6)}****${fullSso.slice(-6)}` : fullSso.replace(/.(?=.{2})/g, '*');
+        ssoEl.dataset.masked = masked;
+        ssoEl.dataset.maskedState = 'true';
+        ssoEl.textContent = masked;
+        const toggleBtn = $('logDetailSsoToggle');
+        if (toggleBtn) toggleBtn.textContent = '显示';
+        $('logDetailError').textContent = l.error_message || '-';
+        renderLogMedia(l);
+        $('logDetailModal').classList.remove('hidden');
+      },
+      closeLogDetailModal = () => $('logDetailModal').classList.add('hidden'),
+      logPrevPage = () => { if (logPage > 1) { logPage--; loadLogs() } },
+      logNextPage = () => { if (logPage * logPageSize < logTotal) { logPage++; loadLogs() } },
+      clearLogs = async () => { if (!confirm('确定要清空所有日志吗？此操作不可恢复！')) return; try { const r = await apiRequest('/api/logs?max_count=0', { method: 'DELETE' }); if (!r) return; const d = await r.json(); d.success ? (showToast('日志已清空', 'success'), logPage = 1, loadLogs()) : showToast(`清空失败: ${extractErrorMessage(d)}`, 'error') } catch (e) { showToast('清空失败: ' + e.message, 'error') } };
+
+    const buildLocalMediaUrl = (url) => {
+      const prefix = 'https://assets.grok.com/';
+      if (url.startsWith(prefix)) {
+        const path = url.slice(prefix.length).replaceAll('/', '-');
+        return `/images/${path}`;
+      }
+      return url;
+    };
+    renderLogMedia = (log) => {
+      const box = $('logDetailMedia'), imgBox = $('logDetailImages'), vidBox = $('logDetailVideos');
+      // Only render media for models that actually return generated media URLs.
+      const mediaModels = new Set(['grok-imagine-0.9', 'grok-3-fast']);
+      if (!log || !log.success || !mediaModels.has(log.model) || !log.media_urls || !log.media_urls.length) {
+        box.classList.add('hidden');
+        imgBox.innerHTML = '';
+        vidBox.innerHTML = '';
+        return;
+      }
+      const urls = log.media_urls || [];
+      const videos = urls.filter(u => /\.(mp4|webm|mov|avi)$/i.test(u));
+      const images = urls.filter(u => !/\.(mp4|webm|mov|avi)$/i.test(u));
+      imgBox.innerHTML = images.map(u => {
+        const local = buildLocalMediaUrl(u);
+        return `<img src="${local}" data-fallback="${u}" onerror="this.src=this.dataset.fallback" class="w-full h-24 object-cover rounded border cursor-pointer" onclick="openImagePreview('${local}','${u}')">`;
+      }).join('');
+      vidBox.innerHTML = videos.map(u => {
+        const local = buildLocalMediaUrl(u);
+        return `<video controls class="w-full max-w-xl rounded border"><source src="${local}"><source src="${u}"></video>`;
+      }).join('');
+      box.classList.remove('hidden');
+    },
+      openImagePreview = (localUrl, fallbackUrl) => { const img = $('imagePreview'); img.src = localUrl; img.onerror = () => { if (fallbackUrl) img.src = fallbackUrl; img.onerror = null; }; $('imagePreviewModal').classList.remove('hidden') },
+      closeImagePreview = () => { $('imagePreview').src = ''; $('imagePreviewModal').classList.add('hidden') },
+      updateLogModelOptions = (models) => {
+        const select = $('logFilterModel');
+        if (!select) return;
+        const current = select.value;
+        const list = Array.from(new Set((models || []).filter(Boolean))).sort();
+        select.innerHTML = '<option value="">全部模型</option>' + list.map(m => `<option value="${m}">${m}</option>`).join('');
+        if (list.includes(current)) select.value = current;
+      };
+
+    toggleSsoMask = () => {
+      const ssoEl = $('logDetailSso');
+      const proxyEl = $('logDetailProxy');
+      if (!ssoEl) return;
+      const masked = ssoEl.dataset.masked || '';
+      const full = ssoEl.dataset.full || '';
+      const isMasked = ssoEl.dataset.maskedState === 'true';
+      ssoEl.textContent = isMasked ? full : masked;
+      ssoEl.dataset.maskedState = isMasked ? 'false' : 'true';
+      if (proxyEl) {
+        const proxyFull = proxyEl.dataset.full || proxyEl.textContent || '';
+        if (proxyFull && proxyFull !== '-') {
+          const [scheme, rest] = proxyFull.includes('://') ? proxyFull.split('://') : ['', proxyFull];
+          const maskedRest = rest.length > 8 ? `${rest.slice(0, 4)}****${rest.slice(-4)}` : rest.replace(/.(?=.{2})/g, '*');
+          proxyEl.textContent = isMasked ? proxyFull : (scheme ? `${scheme}://${maskedRest}` : maskedRest);
+        }
+      }
+      const btn = $('logDetailSsoToggle');
+      if (btn) btn.textContent = isMasked ? '隐藏' : '显示';
+    };
+
+    // === 代理管理功能 ===
+    let allProxies = [], proxyAssignments = {}, allTokensForProxy = [], availableTokensForProxy = [];
+    let proxyLimit = 10, assignmentLimit = 10, proxyPage = 1, assignmentPage = 1, ssoPage = 1, ssoPageSize = 10;
+    let assignmentSearch = '';
+    loadProxies = async () => { try { const r = await apiRequest('/api/proxies'); if (!r) return; const d = await r.json(); if (d.success) { allProxies = d.data.proxies || []; proxyAssignments = d.data.assignments || {}; renderProxies(); renderAssignments(); updateProxyStats(); updateProxySelect(); await updateSsoSelect() } } catch (e) { console.error('加载代理失败:', e) } },
+      updateProxyStats = () => { const total = allProxies.length; const healthy = allProxies.filter(p => p.healthy).length; const unhealthy = total - healthy; const assigned = Object.keys(proxyAssignments).length; $('proxyStatTotal').textContent = total; $('proxyStatHealthy').textContent = healthy; $('proxyStatUnhealthy').textContent = unhealthy; $('proxyStatAssigned').textContent = assigned },
+      renderProxies = () => {
+        const container = $('proxyList');
+        if (!allProxies.length) { container.innerHTML = '<div class="text-sm text-muted-foreground text-center py-8">暂无代理</div>'; return }
+        const list = allProxies.slice().reverse();
+        const total = list.length;
+        const maxPage = Math.ceil(total / proxyLimit) || 1;
+        const page = Math.min(proxyPage, maxPage);
+        proxyPage = page;
+        const start = (page - 1) * proxyLimit;
+        const view = list.slice(start, start + proxyLimit);
+        container.innerHTML = view.map(p => { const pd = formatProxyDisplay(p.url); return `<div class="flex items-center justify-between p-3 rounded-lg border ${p.healthy ? 'border-green-200 bg-green-50/50' : 'border-red-200 bg-red-50/50'}"><div class="flex-1 min-w-0"><div class="text-sm font-mono break-all sm:truncate" title="${pd}">${pd}</div><div class="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground"><span>请求: ${p.total_requests || 0}</span><span>成功: ${p.success_requests || 0}</span><span>失败: ${p.fail_count || 0}</span><span class="inline-flex items-center rounded px-1.5 py-0.5 ${p.healthy ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${p.healthy ? '健康' : '不健康'}</span></div></div><div class="flex items-center gap-1 ml-2 flex-wrap"><button onclick="testProxy('${p.url}')" class="btn-icon hover:bg-blue-50 hover:text-blue-700" title="测试连通性"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></button><button onclick="resetProxyHealth('${p.url}')" class="btn-icon" title="重置健康状态"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button><button onclick="removeProxy('${p.url}')" class="btn-icon hover:bg-destructive/10 hover:text-destructive" title="删除"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div></div>` }).join('');
+        $('proxyPageInfo').textContent = `${page}/${maxPage}`;
+        $('proxyPrevBtn').disabled = page <= 1;
+        $('proxyNextBtn').disabled = page >= maxPage;
+      },
+      renderAssignments = () => {
+        const container = $('assignmentList');
+        const entries = Object.entries(proxyAssignments);
+        if (!entries.length) { container.innerHTML = '<div class="text-sm text-muted-foreground text-center py-4">暂无绑定</div>'; return }
+
+        const term = (assignmentSearch || '').trim().toLowerCase();
+        const list = entries.slice().reverse().filter(([sso]) => !term || String(sso).toLowerCase().includes(term));
+        const total = list.length;
+        if (!total) {
+          container.innerHTML = '<div class="text-sm text-muted-foreground text-center py-4">未找到匹配的绑定</div>';
+          $('assignmentPageInfo').textContent = '1/1';
+          $('assignmentPrevBtn').disabled = true;
+          $('assignmentNextBtn').disabled = true;
+          return;
+        }
+
+        const maxPage = Math.ceil(total / assignmentLimit) || 1;
+        const page = Math.min(assignmentPage, maxPage);
+        assignmentPage = page;
+        const start = (page - 1) * assignmentLimit;
+        const view = list.slice(start, start + assignmentLimit);
+
+        container.innerHTML = view.map(([sso, proxy]) => {
+          const pd = formatProxyDisplay(proxy);
+          return `<div class="flex items-center justify-between p-2 rounded border bg-muted/30"><div class="flex-1 min-w-0"><div class="text-xs font-mono truncate" title="${sso}">${sso.substring(0, 20)}...</div><div class="text-xs text-muted-foreground break-all sm:truncate" title="${pd}">${pd}</div></div><button onclick="unassignProxy('${sso}')" class="btn-icon hover:bg-destructive/10 hover:text-destructive" title="解绑"><svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>`;
+        }).join('');
+        $('assignmentPageInfo').textContent = `${page}/${maxPage}`;
+        $('assignmentPrevBtn').disabled = page <= 1;
+        $('assignmentNextBtn').disabled = page >= maxPage;
+      },
+      updateProxySelect = () => { const select = $('assignProxySelect'); select.innerHTML = '<option value="">请选择代理</option>' + allProxies.map(p => `<option value="${p.url}">${formatProxyDisplay(p.url)}</option>`).join('') },
+      updateSsoSelect = async () => { 
+        try { 
+          const r = await apiRequest('/api/tokens?limit=100000&sort=created_desc'); 
+          if (!r) return; 
+          const d = await r.json(); 
+          if (d.success) { 
+            allTokensForProxy = d.data || []; 
+            const boundSsos = Object.keys(proxyAssignments);
+            availableTokensForProxy = allTokensForProxy.filter(t => t.status !== '失效' && !boundSsos.includes(t.token));
+            ssoPage = 1;
+            renderSsoOptions();
+          } 
+        } catch (e) { console.error('加载Token失败:', e) } 
+      },
+      openAddProxyModal = () => $('addProxyModal').classList.remove('hidden'),
+      closeAddProxyModal = () => { $('addProxyModal').classList.add('hidden'); $('addProxyUrl').value = '' },
+      openBatchProxyModal = () => $('batchProxyModal').classList.remove('hidden'),
+      closeBatchProxyModal = () => { $('batchProxyModal').classList.add('hidden'); $('batchProxyList').value = '' },
+      submitAddProxy = async () => { const url = $('addProxyUrl').value.trim(); if (!url) return showToast('请输入代理URL', 'error'); try { const r = await apiRequest('/api/proxies', { method: 'POST', body: JSON.stringify({ url }) }); if (!r) return; const d = await r.json(); d.success ? (closeAddProxyModal(), showToast('代理添加成功', 'success'), loadProxies()) : showToast(extractErrorMessage(d, '添加失败'), 'error') } catch (e) { showToast('添加失败: ' + e.message, 'error') } },
+      submitBatchProxy = async () => { const raw = $('batchProxyList').value || ''; const urls = Array.from(new Set(raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean))); if (!urls.length) return showToast('请输入代理列表', 'error'); showToast(`正在导入 ${urls.length} 个代理...`, 'info'); let ok = 0, fail = 0, failSamples = []; try { for (const url of urls) { const r = await apiRequest('/api/proxies', { method: 'POST', body: JSON.stringify({ url }) }); if (!r) { fail++; failSamples.push(`${url} (请求失败)`); continue } const d = await r.json(); if (d.success) ok++; else { fail++; if (failSamples.length < 5) failSamples.push(`${url} (${extractErrorMessage(d, '添加失败')})`) } } closeBatchProxyModal(); await loadProxies(); const suffix = fail ? `，失败 ${fail}` : ''; const sampleText = failSamples.length ? `\n${failSamples.join('\n')}` : ''; showToast(`导入完成：成功 ${ok}${suffix}${sampleText ? '（部分失败）' : ''}`, fail ? 'warning' : 'success'); if (sampleText) console.warn('批量导入失败样本:\n' + sampleText) } catch (e) { showToast('批量导入失败: ' + e.message, 'error') } },
+      removeProxy = async (url) => { if (!confirm('确定要删除这个代理吗？')) return; try { const r = await apiRequest('/api/proxies', { method: 'DELETE', body: JSON.stringify({ url }) }); if (!r) return; const d = await r.json(); d.success ? (showToast('代理已删除', 'success'), loadProxies()) : showToast(extractErrorMessage(d, '删除失败'), 'error') } catch (e) { showToast('删除失败: ' + e.message, 'error') } },
+      resetProxyHealth = async (url) => { try { const r = await apiRequest('/api/proxies/health/reset', { method: 'POST', body: JSON.stringify({ url }) }); if (!r) return; const d = await r.json(); d.success ? (showToast('健康状态已重置', 'success'), loadProxies()) : showToast(extractErrorMessage(d, '重置失败'), 'error') } catch (e) { showToast('重置失败: ' + e.message, 'error') } },
+      testProxy = async (url) => { showToast('正在测试代理...', 'info'); try { const r = await apiRequest('/api/proxies/test', { method: 'POST', body: JSON.stringify({ url }) }); if (!r) return; const d = await r.json(); if (d.success) { const note = d.data?.note ? ` (${d.data.note})` : ''; showToast(`代理可用! 响应时间: ${d.data?.response_time || 0}s${note}`, 'success') } else { showToast(extractErrorMessage(d, '代理测试失败'), 'error') } } catch (e) { showToast('测试失败: ' + e.message, 'error') } },
+      assignProxy = async () => { const proxy = $('assignProxySelect').value, selected = getSelectedSso(); if (!proxy) return showToast('请选择代理', 'error'); if (!selected.length) return showToast('请选择SSO Token', 'error'); try { let ok = 0, fail = 0; for (const sso of selected) { const r = await apiRequest('/api/proxies/assign', { method: 'POST', body: JSON.stringify({ proxy_url: proxy, sso }) }); if (!r) { fail++; continue } const d = await r.json(); d.success ? ok++ : fail++ } const msg = fail ? `绑定完成：成功 ${ok}，失败 ${fail}` : `绑定成功：${ok}`; showToast(msg, fail ? 'error' : 'success'); await loadProxies() } catch (e) { showToast('绑定失败: ' + e.message, 'error') } },
+      proxyPrevPage = () => { if (proxyPage > 1) { proxyPage--; renderProxies() } },
+      proxyNextPage = () => { proxyPage++; renderProxies() },
+      assignmentPrevPage = () => { if (assignmentPage > 1) { assignmentPage--; renderAssignments() } },
+      assignmentNextPage = () => { assignmentPage++; renderAssignments() },
+      applyAssignmentSearch = () => { const el = $('assignmentSearchInput'); assignmentSearch = (el && el.value) ? el.value : ''; assignmentPage = 1; renderAssignments() },
+      clearAssignmentSearch = () => { const el = $('assignmentSearchInput'); if (el) el.value = ''; assignmentSearch = ''; assignmentPage = 1; renderAssignments() },
+      renderSsoOptions = () => {
+        const container = $('assignSsoList');
+        if (!availableTokensForProxy.length) {
+          container.innerHTML = '<div class="text-xs text-muted-foreground">暂无可绑定的Token</div>';
+          $('ssoPageInfo').textContent = '1/1';
+          $('ssoPrevBtn').disabled = true;
+          $('ssoNextBtn').disabled = true;
+          return;
+        }
+        const total = availableTokensForProxy.length;
+        const maxPage = Math.ceil(total / ssoPageSize) || 1;
+        const page = Math.min(ssoPage, maxPage);
+        ssoPage = page;
+        const start = (page - 1) * ssoPageSize;
+        const view = availableTokensForProxy.slice(start, start + ssoPageSize);
+        container.innerHTML = view.map(t => `<label class="flex items-center gap-2 text-xs font-mono"><input type="checkbox" class="sso-checkbox" value="${t.token}"> <span class="truncate" title="${t.token}">${t.token.substring(0, 24)}... (${t.status})</span></label>`).join('');
+        $('ssoPageInfo').textContent = `${page}/${maxPage}`;
+        $('ssoPrevBtn').disabled = page <= 1;
+        $('ssoNextBtn').disabled = page >= maxPage;
+      },
+      ssoPrevPage = () => { if (ssoPage > 1) { ssoPage--; renderSsoOptions() } },
+      ssoNextPage = () => { ssoPage++; renderSsoOptions() },
+      selectAllSsoOptions = () => { document.querySelectorAll('#assignSsoList .sso-checkbox').forEach(cb => cb.checked = true) },
+      clearSsoOptions = () => { document.querySelectorAll('#assignSsoList .sso-checkbox').forEach(cb => cb.checked = false) },
+      getSelectedSso = () => Array.from(document.querySelectorAll('#assignSsoList .sso-checkbox:checked')).map(cb => cb.value),
+      unassignProxy = async (sso) => { if (!confirm('确定要解除这个绑定吗？')) return; try { const r = await apiRequest('/api/proxies/unassign', { method: 'POST', body: JSON.stringify({ sso }) }); if (!r) return; const d = await r.json(); d.success ? (showToast('已解绑', 'success'), loadProxies()) : showToast(extractErrorMessage(d, '解绑失败'), 'error') } catch (e) { showToast('解绑失败: ' + e.message, 'error') } };
+
+    // Search shortcut: press Enter in "当前绑定" search box.
+    document.addEventListener('DOMContentLoaded', () => {
+      const el = $('assignmentSearchInput');
+      if (!el) return;
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyAssignmentSearch(); });
+    });
+
+    const setDefaultLogRange = () => {
+      const startInput = $('logFilterStart'), endInput = $('logFilterEnd');
+      if (!startInput || !endInput) return;
+      if (startInput.value || endInput.value) return;
+      const now = new Date();
+      const start = new Date(now);
+      start.setDate(start.getDate() - 1);
+      start.setHours(0, 0, 0, 0);
+      const pad = (n) => String(n).padStart(2, '0');
+      const toLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      startInput.value = toLocal(start);
+      endInput.value = toLocal(now);
+    };
+
+    window.addEventListener('DOMContentLoaded', () => {
+      checkAuth();
+      loadStorageMode();
+      loadSettings();
+      refreshTokens();
+      setDefaultLogRange();
+      setInterval(() => { loadStats(); loadRemainingStats() }, 30000);
+      window.addEventListener('resize', () => { const hoverCard = $('storageMode').closest('.hover-card'); hoverCard && updateHoverCardPosition(hoverCard) });
+      const hoverCard = $('storageMode').closest('.hover-card'), trigger = hoverCard?.querySelector('.hover-card-trigger'), content = hoverCard?.querySelector('.hover-card-content');
+      if (trigger && content) { trigger.addEventListener('mouseenter', () => { content.style.opacity = '1'; content.style.visibility = 'visible' }); trigger.addEventListener('mouseleave', () => { content.style.opacity = '0'; content.style.visibility = 'hidden' }) };
+      $('cfgProxyUrl').addEventListener('input', updateCacheProxyReadonly);
+      $('cfgDynamicStatsig').addEventListener('change', updateStatsigIdState);
+
+      const previewModal = $('imagePreviewModal');
+      document.addEventListener('click', (e) => {
+        if (!previewModal || previewModal.classList.contains('hidden')) return;
+        if (e.target === previewModal) closeImagePreview();
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && previewModal && !previewModal.classList.contains('hidden')) closeImagePreview();
+      });
+    });
   </script>
 </body>
 
