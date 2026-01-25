@@ -609,6 +609,82 @@ async def update_token_note(request: UpdateTokenNoteRequest, _: bool = Depends(v
         raise HTTPException(status_code=500, detail={"error": f"更新失败: {e}", "code": "UPDATE_NOTE_ERROR"})
 
 
+# === 调用日志 API ===
+
+@router.get("/api/logs")
+async def get_logs(
+    page: int = 1,
+    page_size: int = 20,
+    sso: Optional[str] = None,
+    success: Optional[bool] = None,
+    model: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    _: bool = Depends(verify_admin_session)
+) -> Dict[str, Any]:
+    """获取调用日志列表"""
+    try:
+        logger.debug(f"[Admin] 获取调用日志: page={page}, sso={sso}, model={model}")
+        
+        logs, total = await call_log_service.query(
+            sso=sso,
+            success=success,
+            model=model,
+            start_time=start_time,
+            end_time=end_time,
+            page=page,
+            page_size=page_size
+        )
+        
+        return {
+            "success": True,
+            "data": [log.to_dict() for log in logs],
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        }
+    except Exception as e:
+        logger.error(f"[Admin] 获取调用日志异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"获取失败: {e}", "code": "LOGS_ERROR"})
+
+
+@router.get("/api/logs/models")
+async def get_log_models(_: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """获取日志中的所有模型列表"""
+    try:
+        models = call_log_service.get_models()
+        return {"success": True, "data": models}
+    except Exception as e:
+        logger.error(f"[Admin] 获取模型列表异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"获取失败: {e}", "code": "LOGS_MODELS_ERROR"})
+
+
+@router.get("/api/logs/stats")
+async def get_log_stats(_: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """获取日志统计信息"""
+    try:
+        stats = call_log_service.get_stats()
+        return {"success": True, "data": stats}
+    except Exception as e:
+        logger.error(f"[Admin] 获取日志统计异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"获取失败: {e}", "code": "LOGS_STATS_ERROR"})
+
+
+@router.delete("/api/logs")
+async def clear_logs(max_count: int = 0, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """清空或清理日志"""
+    try:
+        if max_count == 0:
+            deleted = await call_log_service.clear_all()
+            return {"success": True, "message": f"已清空 {deleted} 条日志", "deleted": deleted}
+        else:
+            deleted = await call_log_service.cleanup(max_count)
+            return {"success": True, "message": f"已清理 {deleted} 条日志", "deleted": deleted}
+    except Exception as e:
+        logger.error(f"[Admin] 清理日志异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"清理失败: {e}", "code": "LOGS_CLEAR_ERROR"})
+
+
 @router.post("/api/tokens/test")
 async def test_token(request: TestTokenRequest, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
     """测试Token可用性"""
