@@ -4,7 +4,8 @@ import orjson
 import uuid
 import time
 import asyncio
-from typing import AsyncGenerator, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import AsyncGenerator, Tuple, Optional
 
 from app.core.config import setting
 from app.core.exception import GrokApiException
@@ -20,6 +21,18 @@ from app.models.openai_schema import (
 from app.services.grok.cache import image_cache_service, video_cache_service
 
 
+# 用于同步迭代的线程池
+_iter_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="iter_worker")
+
+
+def shutdown_iter_executor():
+    """关闭迭代线程池，供应用退出时调用"""
+    global _iter_executor
+    if _iter_executor:
+        _iter_executor.shutdown(wait=False)
+        logger.info("[Processor] 迭代线程池已关闭")
+
+
 class StreamTimeoutManager:
     """流式响应超时管理"""
     
@@ -31,19 +44,18 @@ class StreamTimeoutManager:
         self.last_chunk_time = self.start_time
         self.first_received = False
     
-    def check_timeout(self) -> Tuple[bool, str]:
-        """检查超时"""
-        now = asyncio.get_event_loop().time()
-        
-        if not self.first_received and now - self.start_time > self.first_timeout:
-            return True, f"首次响应超时({self.first_timeout}秒)"
-        
-        if self.total_timeout > 0 and now - self.start_time > self.total_timeout:
-            return True, f"总超时({self.total_timeout}秒)"
-        
-        if self.first_received and now - self.last_chunk_time > self.chunk_timeout:
-            return True, f"数据块超时({self.chunk_timeout}秒)"
-        
+    def get_current_timeout(self) -> float:
+        """获取当前应该使用的超时时间"""
+        if not self.first_received:
+            return self.first_timeout
+        return self.chunk_timeout
+    
+    def check_total_timeout(self) -> Tuple[bool, str]:
+        """仅检查总超时（用于异步迭代模式）"""
+        if self.total_timeout > 0:
+            now = asyncio.get_event_loop().time()
+            if now - self.start_time > self.total_timeout:
+                return True, f"总超时({self.total_timeout}秒)"
         return False, ""
     
     def mark_received(self):
@@ -56,15 +68,107 @@ class StreamTimeoutManager:
         return asyncio.get_event_loop().time() - self.start_time
 
 
+async def iter_lines_with_timeout(response, timeout_mgr: StreamTimeoutManager) -> AsyncGenerator[bytes, None]:
+    """
+    将同步的 iter_lines() 包装成带超时的异步迭代器
+    
+    解决问题：原来的 for chunk in response.iter_lines() 会阻塞在等待下一个数据块，
+    导致超时检测代码永远不会执行。这个函数使用 asyncio.wait_for 实现真正的超时控制。
+    
+    注意：超时发生时会抛出 asyncio.TimeoutError，调用方需要在 finally 中关闭 response。
+    """
+    loop = asyncio.get_event_loop()
+    iterator = iter(response.iter_lines())
+    
+    def get_next():
+        """在线程中获取下一个数据块"""
+        try:
+            return next(iterator)
+        except StopIteration:
+            return None
+    
+    try:
+        while True:
+            # 检查总超时
+            is_timeout, timeout_msg = timeout_mgr.check_total_timeout()
+            if is_timeout:
+                logger.warning(f"[Processor] {timeout_msg}")
+                raise asyncio.TimeoutError(timeout_msg)
+            
+            # 获取当前超时时间（首次响应用 first_timeout，之后用 chunk_timeout）
+            current_timeout = timeout_mgr.get_current_timeout()
+            
+            try:
+                # 使用 wait_for 实现真正的超时控制
+                chunk = await asyncio.wait_for(
+                    loop.run_in_executor(_iter_executor, get_next),
+                    timeout=current_timeout
+                )
+                
+                if chunk is None:
+                    # 迭代结束
+                    break
+                
+                yield chunk
+                
+            except asyncio.TimeoutError:
+                timeout_type = "首次响应" if not timeout_mgr.first_received else "数据块"
+                logger.warning(f"[Processor] {timeout_type}超时({current_timeout}秒)")
+                raise
+    except asyncio.TimeoutError:
+        # 超时时尝试关闭底层连接，避免资源泄漏
+        try:
+            if hasattr(response, 'raw') and response.raw:
+                response.raw.close()
+            if hasattr(response, 'connection') and response.connection:
+                response.connection.close()
+        except Exception as e:
+            logger.debug(f"[Processor] 超时关闭连接时出错: {e}")
+        raise
+
+
 class GrokResponseProcessor:
     """Grok响应处理器"""
 
     @staticmethod
-    async def process_normal(response, auth_token: str, model: str = None) -> OpenAIChatCompletionResponse:
+    async def process_normal(response, auth_token: str, model: Optional[str] = None) -> OpenAIChatCompletionResponse:
         """处理非流式响应"""
         response_closed = False
+        
+        # 非流式请求的超时配置
+        total_timeout = setting.grok_config.get("stream_total_timeout", 600)
+        chunk_timeout = setting.grok_config.get("stream_chunk_timeout", 120)
+        
+        loop = asyncio.get_event_loop()
+        iterator = iter(response.iter_lines())
+        
+        def get_next():
+            """在线程中获取下一个数据块"""
+            try:
+                return next(iterator)
+            except StopIteration:
+                return None
+        
         try:
-            for chunk in response.iter_lines():
+            start_time = time.time()
+            
+            while True:
+                # 检查总超时
+                if time.time() - start_time > total_timeout:
+                    raise asyncio.TimeoutError(f"总超时({total_timeout}秒)")
+                
+                # 使用 wait_for 实现真正的超时控制
+                try:
+                    chunk = await asyncio.wait_for(
+                        loop.run_in_executor(_iter_executor, get_next),
+                        timeout=chunk_timeout
+                    )
+                except asyncio.TimeoutError:
+                    raise asyncio.TimeoutError(f"数据块超时({chunk_timeout}秒)")
+                
+                if chunk is None:
+                    break
+                    
                 if not chunk:
                     continue
 
@@ -113,9 +217,14 @@ class GrokResponseProcessor:
 
             raise GrokApiException("无响应数据", "NO_RESPONSE")
 
+        except asyncio.TimeoutError as e:
+            logger.error(f"[Processor] 非流式请求超时: {e}")
+            raise GrokApiException(f"请求超时: {e}", "TIMEOUT_ERROR") from e
         except orjson.JSONDecodeError as e:
             logger.error(f"[Processor] JSON解析失败: {e}")
             raise GrokApiException(f"JSON解析失败: {e}", "JSON_ERROR") from e
+        except GrokApiException:
+            raise
         except Exception as e:
             logger.error(f"[Processor] 处理错误: {type(e).__name__}: {e}")
             raise GrokApiException(f"响应处理错误: {e}", "PROCESS_ERROR") from e
@@ -147,7 +256,7 @@ class GrokResponseProcessor:
             total_timeout=setting.grok_config.get("stream_total_timeout", 600)
         )
 
-        def make_chunk(content: str, finish: str = None):
+        def make_chunk(content: str, finish: Optional[str] = None):
             """生成响应块"""
             chunk_data = OpenAIChatCompletionChunkResponse(
                 id=f"chatcmpl-{uuid.uuid4()}",
@@ -165,15 +274,8 @@ class GrokResponseProcessor:
             return f"data: {chunk_data.model_dump_json()}\n\n"
 
         try:
-            for chunk in response.iter_lines():
-                # 超时检查
-                is_timeout, timeout_msg = timeout_mgr.check_timeout()
-                if is_timeout:
-                    logger.warning(f"[Processor] {timeout_msg}")
-                    yield make_chunk("", "stop")
-                    yield "data: [DONE]\n\n"
-                    return
-
+            # 使用带超时的异步迭代器，解决 iter_lines() 阻塞导致超时检测失效的问题
+            async for chunk in iter_lines_with_timeout(response, timeout_mgr):
                 logger.debug(f"[Processor] 收到数据块: {len(chunk)} bytes")
                 if not chunk:
                     continue
@@ -346,6 +448,11 @@ class GrokResponseProcessor:
             yield "data: [DONE]\n\n"
             logger.info(f"[Processor] 流式完成，耗时: {timeout_mgr.duration():.2f}秒")
 
+        except asyncio.TimeoutError as e:
+            # 超时处理 - 由 iter_lines_with_timeout 抛出
+            logger.warning(f"[Processor] 流式超时: {e}")
+            yield make_chunk("", "stop")
+            yield "data: [DONE]\n\n"
         except Exception as e:
             logger.error(f"[Processor] 严重错误: {e}")
             yield make_chunk(f"处理错误: {e}", "error")

@@ -13,6 +13,7 @@ from app.core.exception import register_exception_handlers
 from app.core.storage import storage_manager
 from app.core.config import setting
 from app.services.grok.token import token_manager
+from app.services.grok.processer import shutdown_iter_executor
 from app.api.v1.chat import router as chat_router
 from app.api.v1.models import router as models_router
 from app.api.v1.images import router as images_router
@@ -90,11 +91,14 @@ async def lifespan(app: FastAPI):
         await mcp_lifespan_context.__aexit__(None, None, None)
         logger.info("[MCP] MCP服务已关闭")
         
-        # 2. 关闭批量保存任务并刷新数据
+        # 2. 关闭迭代线程池
+        shutdown_iter_executor()
+        
+        # 3. 关闭批量保存任务并刷新数据
         await token_manager.shutdown()
         logger.info("[Token] Token管理器已关闭")
         
-        # 3. 关闭核心服务
+        # 4. 关闭核心服务
         await storage_manager.close()
         logger.info("[Grok2API] 应用关闭成功")
 
