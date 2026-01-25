@@ -19,8 +19,7 @@ class CallLog:
     """调用日志数据模型"""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: int = field(default_factory=lambda: int(time.time() * 1000))
-    sso: str = ""  # SSO标识（脱敏显示前10位）
-    sso_full: str = ""  # 完整SSO
+    sso: str = ""  # SSO标识（脱敏：前6位+****+后4位）
     model: str = ""  # 调用模型
     success: bool = True  # 是否成功
     status_code: int = 0  # HTTP状态码
@@ -31,8 +30,13 @@ class CallLog:
     media_urls: List[str] = field(default_factory=list)  # 生成媒体URL列表
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return asdict(self)
+        """转换为字典（持久化安全）"""
+        data = asdict(self)
+        # 确保不保存完整SSO（二次脱敏保护）
+        if len(data.get("sso", "")) > 20:
+            sso = data["sso"]
+            data["sso"] = f"{sso[:6]}****{sso[-4:]}" if len(sso) > 10 else sso[:6] + "****"
+        return data
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'CallLog':
@@ -63,6 +67,7 @@ class CallLogService:
         self._save_task: Optional[asyncio.Task] = None
         self._shutdown = False
         self._max_logs = 10000  # 默认最大日志数
+        self._pending_queue: List[CallLog] = []  # 待处理日志队列（线程安全追加）
         
         self._initialized = True
         logger.debug(f"[CallLog] 初始化完成: {self.log_file}")
@@ -122,6 +127,21 @@ class CallLogService:
         while not self._shutdown:
             await asyncio.sleep(interval)
             
+            # 处理待处理队列
+            if self._pending_queue:
+                async with self._lock:
+                    pending = self._pending_queue
+                    self._pending_queue = []
+                    self._logs.extend(pending)
+                    
+                    # 自动清理超限日志
+                    if len(self._logs) > self._max_logs:
+                        excess = len(self._logs) - self._max_logs
+                        self._logs = self._logs[excess:]
+                        logger.debug(f"[CallLog] 自动清理 {excess} 条旧日志")
+                
+                self._save_pending = True
+            
             if self._save_pending and not self._shutdown:
                 try:
                     await self._save_logs()
@@ -147,6 +167,13 @@ class CallLogService:
             except asyncio.CancelledError:
                 pass
         
+        # 处理剩余队列
+        if self._pending_queue:
+            async with self._lock:
+                self._logs.extend(self._pending_queue)
+                self._pending_queue = []
+            self._save_pending = True
+        
         # 最终保存
         if self._save_pending:
             await self._save_logs()
@@ -169,6 +196,42 @@ class CallLogService:
         self._mark_dirty()
         logger.debug(f"[CallLog] 记录日志: {log.sso[:10]}... {log.model} {log.success}")
     
+    def queue_call(
+        self,
+        sso: str,
+        model: str,
+        success: bool,
+        status_code: int,
+        response_time: float,
+        token_consumed: int = 1,
+        error_message: str = "",
+        proxy_used: str = "",
+        media_urls: Optional[List[str]] = None
+    ) -> None:
+        """同步方法：将日志加入队列（不阻塞，由后台任务处理）"""
+        # SSO脱敏处理（前6位+****+后4位，不可逆）
+        if len(sso) > 14:
+            sso_masked = f"{sso[:6]}****{sso[-4:]}"
+        elif len(sso) > 6:
+            sso_masked = sso[:6] + "****"
+        else:
+            sso_masked = sso
+        urls = media_urls or []
+        
+        log = CallLog(
+            sso=sso_masked,
+            model=model,
+            success=success,
+            status_code=status_code,
+            response_time=response_time,
+            token_consumed=token_consumed,
+            error_message=error_message,
+            proxy_used=proxy_used,
+            media_urls=urls
+        )
+        # 直接追加到队列，由 _batch_save_worker 处理
+        self._pending_queue.append(log)
+    
     async def record_call(
         self,
         sso: str,
@@ -182,13 +245,17 @@ class CallLogService:
         media_urls: Optional[List[str]] = None
     ) -> None:
         """便捷方法：记录API调用"""
-        # SSO脱敏处理
-        sso_masked = sso[:10] + "****" if len(sso) > 10 else sso
+        # SSO脱敏处理（前6位+****+后4位，不可逆）
+        if len(sso) > 14:
+            sso_masked = f"{sso[:6]}****{sso[-4:]}"
+        elif len(sso) > 6:
+            sso_masked = sso[:6] + "****"
+        else:
+            sso_masked = sso
         urls = media_urls or []
         
         log = CallLog(
             sso=sso_masked,
-            sso_full=sso,
             model=model,
             success=success,
             status_code=status_code,
@@ -234,7 +301,7 @@ class CallLogService:
             sso_lower = sso.lower()
             filtered = [
                 log for log in filtered
-                if sso_lower in (log.sso_full or log.sso).lower()
+                if sso_lower in log.sso.lower()
             ]
         
         if success is not None:

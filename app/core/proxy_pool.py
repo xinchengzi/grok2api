@@ -44,7 +44,8 @@ class ProxyPool:
         self._last_fetch_time: float = 0
         self._fetch_interval: int = 300  # 5分钟刷新一次
         self._enabled: bool = False
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # 用于代理获取
+        self._state_lock = asyncio.Lock()  # 用于状态变更（SSO绑定、代理健康等）
         self._save_lock = asyncio.Lock()
         self._storage = None
         self._suspend_persist = False
@@ -94,7 +95,7 @@ class ProxyPool:
             logger.info("[ProxyPool] 未配置代理")
     
     def add_proxy(self, url: str) -> bool:
-        """添加代理
+        """添加代理（线程安全）
         
         Args:
             url: 代理URL
@@ -117,7 +118,7 @@ class ProxyPool:
         return True
     
     def remove_proxy(self, url: str) -> bool:
-        """移除代理
+        """移除代理（线程安全）
         
         Args:
             url: 代理URL
@@ -140,8 +141,8 @@ class ProxyPool:
         self._schedule_persist()
         return True
     
-    def assign_to_sso(self, proxy_url: str, sso: str) -> bool:
-        """将代理分配给SSO
+    async def assign_to_sso(self, proxy_url: str, sso: str) -> bool:
+        """将代理分配给SSO（线程安全）
         
         Args:
             proxy_url: 代理URL
@@ -150,29 +151,30 @@ class ProxyPool:
         Returns:
             是否分配成功
         """
-        normalized = self._normalize_proxy(proxy_url)
-        if normalized not in self._proxies:
-            logger.warning(f"[ProxyPool] 代理不存在: {normalized}")
-            return False
-        
-        # 如果SSO已绑定其他代理，先解绑
-        if sso in self._sso_assignments:
-            old_proxy = self._sso_assignments[sso]
-            if old_proxy in self._proxies:
-                self._proxies[old_proxy].assigned_sso = [
-                    s for s in self._proxies[old_proxy].assigned_sso if s != sso
-                ]
-        
-        self._sso_assignments[sso] = normalized
-        if sso not in self._proxies[normalized].assigned_sso:
-            self._proxies[normalized].assigned_sso.append(sso)
-        
-        logger.info(f"[ProxyPool] 绑定SSO: {sso[:10]}... -> {normalized}")
+        async with self._state_lock:
+            normalized = self._normalize_proxy(proxy_url)
+            if normalized not in self._proxies:
+                logger.warning(f"[ProxyPool] 代理不存在: {normalized}")
+                return False
+            
+            # 如果SSO已绑定其他代理，先解绑
+            if sso in self._sso_assignments:
+                old_proxy = self._sso_assignments[sso]
+                if old_proxy in self._proxies:
+                    self._proxies[old_proxy].assigned_sso = [
+                        s for s in self._proxies[old_proxy].assigned_sso if s != sso
+                    ]
+            
+            self._sso_assignments[sso] = normalized
+            if sso not in self._proxies[normalized].assigned_sso:
+                self._proxies[normalized].assigned_sso.append(sso)
+            
+            logger.debug(f"[ProxyPool] 绑定SSO: {sso[:10]}... -> {normalized}")
         self._schedule_persist()
         return True
     
-    def unassign_from_sso(self, sso: str) -> bool:
-        """取消SSO的代理绑定
+    async def unassign_from_sso(self, sso: str) -> bool:
+        """取消SSO的代理绑定（线程安全）
         
         Args:
             sso: SSO标识
@@ -180,22 +182,23 @@ class ProxyPool:
         Returns:
             是否取消成功
         """
-        if sso not in self._sso_assignments:
-            return False
-        
-        proxy_url = self._sso_assignments[sso]
-        if proxy_url in self._proxies:
-            self._proxies[proxy_url].assigned_sso = [
-                s for s in self._proxies[proxy_url].assigned_sso if s != sso
-            ]
-        
-        del self._sso_assignments[sso]
-        logger.info(f"[ProxyPool] 解绑SSO: {sso[:10]}...")
+        async with self._state_lock:
+            if sso not in self._sso_assignments:
+                return False
+            
+            proxy_url = self._sso_assignments[sso]
+            if proxy_url in self._proxies:
+                self._proxies[proxy_url].assigned_sso = [
+                    s for s in self._proxies[proxy_url].assigned_sso if s != sso
+                ]
+            
+            del self._sso_assignments[sso]
+            logger.debug(f"[ProxyPool] 解绑SSO: {sso[:10]}...")
         self._schedule_persist()
         return True
 
     async def get_proxy_for_sso(self, sso: str = "") -> Optional[str]:
-        """获取SSO对应的代理
+        """获取SSO对应的代理（线程安全）
         
         优先返回绑定的代理，否则自动分配
         
@@ -205,22 +208,31 @@ class ProxyPool:
         Returns:
             代理URL或None
         """
-        # 1. 检查SSO绑定
-        if sso and sso in self._sso_assignments:
-            proxy_url = self._sso_assignments[sso]
-            if proxy_url in self._proxies and self._proxies[proxy_url].healthy:
-                return proxy_url
-            # 解绑无效/不健康代理
-            self.unassign_from_sso(sso)
-        
-        # 2. 自动分配（轮询健康代理）
-        proxy = await self._select_proxy_round_robin()
-        if sso and proxy:
-            self.assign_to_sso(proxy, sso)
-        return proxy
+        async with self._state_lock:
+            # 1. 检查SSO绑定
+            if sso and sso in self._sso_assignments:
+                proxy_url = self._sso_assignments[sso]
+                if proxy_url in self._proxies and self._proxies[proxy_url].healthy:
+                    return proxy_url
+                # 解绑无效/不健康代理（在锁内操作）
+                if proxy_url in self._proxies:
+                    self._proxies[proxy_url].assigned_sso = [
+                        s for s in self._proxies[proxy_url].assigned_sso if s != sso
+                    ]
+                del self._sso_assignments[sso]
+            
+            # 2. 自动分配（轮询健康代理）
+            proxy = await self._select_proxy_round_robin_locked()
+            if sso and proxy:
+                # 直接在锁内绑定
+                self._sso_assignments[sso] = proxy
+                if sso not in self._proxies[proxy].assigned_sso:
+                    self._proxies[proxy].assigned_sso.append(sso)
+                self._schedule_persist()
+            return proxy
     
-    async def _select_proxy_round_robin(self) -> Optional[str]:
-        """轮询选择健康代理"""
+    async def _select_proxy_round_robin_locked(self) -> Optional[str]:
+        """轮询选择健康代理（需在_state_lock内调用）"""
         healthy_proxies = [url for url, info in self._proxies.items() if info.healthy]
         
         if not healthy_proxies:
@@ -243,47 +255,54 @@ class ProxyPool:
         
         return selected
     
-    def mark_failure(self, proxy_url: str) -> None:
-        """标记代理失败
+    async def _select_proxy_round_robin(self) -> Optional[str]:
+        """轮询选择健康代理（外部调用，自动加锁）"""
+        async with self._state_lock:
+            return await self._select_proxy_round_robin_locked()
+    
+    async def mark_failure(self, proxy_url: str) -> None:
+        """标记代理失败（线程安全）
         
         Args:
             proxy_url: 代理URL
         """
-        normalized = self._normalize_proxy(proxy_url)
-        if normalized not in self._proxies:
-            return
-        
-        info = self._proxies[normalized]
-        info.fail_count += 1
-        
-        if info.fail_count >= MAX_FAIL_COUNT:
-            info.healthy = False
-            logger.warning(f"[ProxyPool] 代理标记为不健康: {normalized} (连续失败{info.fail_count}次)")
-            # 解绑所有SSO
-            for sso in list(info.assigned_sso):
-                if sso in self._sso_assignments:
-                    del self._sso_assignments[sso]
-            info.assigned_sso = []
+        async with self._state_lock:
+            normalized = self._normalize_proxy(proxy_url)
+            if normalized not in self._proxies:
+                return
+            
+            info = self._proxies[normalized]
+            info.fail_count += 1
+            
+            if info.fail_count >= MAX_FAIL_COUNT:
+                info.healthy = False
+                logger.warning(f"[ProxyPool] 代理标记为不健康: {normalized} (连续失败{info.fail_count}次)")
+                # 解绑所有SSO
+                for sso in list(info.assigned_sso):
+                    if sso in self._sso_assignments:
+                        del self._sso_assignments[sso]
+                info.assigned_sso = []
         self._schedule_persist()
     
-    def mark_success(self, proxy_url: str) -> None:
-        """标记代理成功（重置失败计数）
+    async def mark_success(self, proxy_url: str) -> None:
+        """标记代理成功（线程安全）
         
         Args:
             proxy_url: 代理URL
         """
-        normalized = self._normalize_proxy(proxy_url)
-        if normalized not in self._proxies:
-            return
-        
-        info = self._proxies[normalized]
-        info.fail_count = 0
-        info.success_requests += 1
-        
-        # 如果之前不健康，恢复健康状态
-        if not info.healthy:
-            info.healthy = True
-            logger.info(f"[ProxyPool] 代理恢复健康: {normalized}")
+        async with self._state_lock:
+            normalized = self._normalize_proxy(proxy_url)
+            if normalized not in self._proxies:
+                return
+            
+            info = self._proxies[normalized]
+            info.fail_count = 0
+            info.success_requests += 1
+            
+            # 如果之前不健康，恢复健康状态
+            if not info.healthy:
+                info.healthy = True
+                logger.info(f"[ProxyPool] 代理恢复健康: {normalized}")
         self._schedule_persist()
     
     def get_all_proxies(self) -> List[Dict[str, Any]]:

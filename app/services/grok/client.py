@@ -101,9 +101,9 @@ class GrokClient:
                 if not stream and isinstance(result, tuple):
                     result, media_urls = result
                 
-                # 记录成功日志
+                # 记录成功日志（同步队列，不阻塞）
                 response_time = time.time() - start_time
-                asyncio.create_task(call_log_service.record_call(
+                call_log_service.queue_call(
                     sso=sso_token,
                     model=model,
                     success=True,
@@ -111,11 +111,11 @@ class GrokClient:
                     response_time=response_time,
                     proxy_used=proxy_used,
                     media_urls=media_urls
-                ))
+                )
                 
                 # 标记代理成功
                 if proxy_used:
-                    proxy_pool.mark_success(proxy_used)
+                    asyncio.create_task(proxy_pool.mark_success(proxy_used))
                 
                 return result
 
@@ -126,7 +126,7 @@ class GrokClient:
                     # 记录失败日志
                     response_time = time.time() - start_time
                     status = e.context.get("status", 0) if e.context else 0
-                    asyncio.create_task(call_log_service.record_call(
+                    call_log_service.queue_call(
                         sso=sso_token,
                         model=model,
                         success=False,
@@ -134,7 +134,7 @@ class GrokClient:
                         response_time=response_time,
                         error_message=str(e),
                         proxy_used=proxy_used
-                    ))
+                    )
                     raise
 
                 status = e.context.get("status") if e.context else None
@@ -143,7 +143,7 @@ class GrokClient:
                 if status not in retry_codes:
                     # 记录失败日志
                     response_time = time.time() - start_time
-                    asyncio.create_task(call_log_service.record_call(
+                    call_log_service.queue_call(
                         sso=sso_token,
                         model=model,
                         success=False,
@@ -151,7 +151,7 @@ class GrokClient:
                         response_time=response_time,
                         error_message=str(e),
                         proxy_used=proxy_used
-                    ))
+                    )
                     raise
 
                 if i < MAX_RETRY - 1:
@@ -161,7 +161,7 @@ class GrokClient:
         # 记录最终失败日志
         response_time = time.time() - start_time
         status = last_err.context.get("status", 0) if last_err and last_err.context else 0
-        asyncio.create_task(call_log_service.record_call(
+        call_log_service.queue_call(
             sso=sso_token,
             model=model,
             success=False,
@@ -169,7 +169,7 @@ class GrokClient:
             response_time=response_time,
             error_message=str(last_err) if last_err else "请求失败",
             proxy_used=proxy_used
-        ))
+        )
         
         raise last_err or GrokApiException("请求失败", "REQUEST_ERROR")
 
@@ -379,7 +379,7 @@ class GrokClient:
                     # 内层403重试：仅当有代理池时触发
                     if response.status_code == 403 and proxy_pool._enabled:
                         if proxy:
-                            proxy_pool.mark_failure(proxy)
+                            asyncio.create_task(proxy_pool.mark_failure(proxy))
                         retry_403_count += 1
                         
                         if retry_403_count <= max_403_retries:
@@ -410,7 +410,7 @@ class GrokClient:
                     
                     # 标记代理成功
                     if proxy:
-                        proxy_pool.mark_success(proxy)
+                        asyncio.create_task(proxy_pool.mark_success(proxy))
                     
                     # 如果是重试成功，记录日志
                     if outer_retry > 0 or retry_403_count > 0:
@@ -429,10 +429,7 @@ class GrokClient:
                     if is_tls and tls_retry_count < MAX_TLS_RETRY:
                         tls_retry_count += 1
                         if proxy:
-                            try:
-                                proxy_pool.mark_failure(proxy)
-                            except Exception:
-                                pass
+                            asyncio.create_task(proxy_pool.mark_failure(proxy))
                         logger.warning(
                             f"[Client] TLS/握手瞬断，重试 {tls_retry_count}/{MAX_TLS_RETRY} "
                             f"(outer={outer_retry}/{MAX_OUTER_RETRY}, 403_retry={retry_403_count}/{max_403_retries}, proxy={'on' if proxy else 'off'}): {e}"
