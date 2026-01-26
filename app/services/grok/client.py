@@ -17,6 +17,7 @@ from app.services.grok.upload import ImageUploadManager
 from app.services.grok.create import PostCreateManager
 from app.core.exception import GrokApiException
 from app.services.call_log import call_log_service
+from app.services.request_debug_log import request_debug_log_service
 
 
 # 常量
@@ -63,11 +64,13 @@ class GrokClient:
         # 如果只是历史生成的图片（用于连续对话修改），走标准图片生成流程
         is_video = info.get("is_video_model", False) and has_user_uploaded
 
-        return await GrokClient._retry(model, segments, image_urls, user_image_urls, grok_model, mode, is_video, stream)
+        return await GrokClient._retry(model, request, request.get("messages", []), segments, image_urls, user_image_urls, grok_model, mode, is_video, stream)
 
     @staticmethod
     async def _retry(
         model: str,
+        raw_request: dict,
+        raw_messages: List[Dict],
         segments: List["GrokClient._Segment"],
         image_urls: List[str],
         user_image_urls: List[str],
@@ -92,15 +95,21 @@ class GrokClient:
                 # 获取当前使用的代理
                 proxy_used = await proxy_pool.get_proxy_for_sso(sso_token) or ""
 
+                is_imagine = model == "grok-imagine-0.9"
+
                 # 决定本次真正要上传/绑定的图片集合
                 # - 普通对话：保留全部历史图片（按出现顺序）
                 # - 视频模型：仅使用“最后一张用户上传图片”，避免历史图片干扰
+                # - imagine：仅绑定一张“基图”（用户最后上传图优先，否则历史最后一张图），否则走纯文本生图
                 images_to_use = image_urls
                 if is_video:
                     if user_image_urls:
                         images_to_use = [user_image_urls[-1]]
                     else:
                         images_to_use = []
+                elif is_imagine:
+                    base_img = user_image_urls[-1] if user_image_urls else (image_urls[-1] if image_urls else None)
+                    images_to_use = [base_img] if base_img else []
 
                 unique_urls = GrokClient._dedupe_keep_order(images_to_use)
                 upload_map = await GrokClient._upload(unique_urls, token)
@@ -116,7 +125,10 @@ class GrokClient:
                     img_ids.append(fid)
                     img_uris.append(furi or "")
 
-                rendered_content = GrokClient._render_segments(segments, url_to_att_index)
+                if is_imagine:
+                    rendered_content = GrokClient._build_imagine_prompt(raw_messages)
+                else:
+                    rendered_content = GrokClient._render_segments(segments, url_to_att_index)
 
                 # 视频模型创建会话
                 post_id: Optional[str] = None
@@ -124,6 +136,24 @@ class GrokClient:
                     post_id = await GrokClient._create_post(img_ids[0], img_uris[0], token)
 
                 payload = GrokClient._build_payload(rendered_content, grok_model, mode, img_ids, img_uris, is_video, post_id)
+
+                # 调试：保存完整请求/转换结果（默认关闭）
+                await request_debug_log_service.log(
+                    openai_request=raw_request,
+                    grok_payload=payload,
+                    meta={
+                        "model": model,
+                        "grok_model": grok_model,
+                        "mode": mode,
+                        "stream": stream,
+                        "is_video": is_video,
+                        "is_imagine": is_imagine,
+                        "selected_image_urls": unique_urls,
+                        "url_to_att_index": url_to_att_index,
+                        "file_attachments_count": len(img_ids),
+                        "proxy_used": proxy_used,
+                    },
+                )
                 result = await GrokClient._request(payload, token, model, stream, post_id)
                 media_urls = []
                 if not stream and isinstance(result, tuple):
@@ -205,6 +235,53 @@ class GrokClient:
     _IMG_PATTERN = re.compile(r'!\[(?P<alt>.*?)\]\((?P<url>https?://[^\s\)]+)\)')
 
     _Segment = Tuple[str, str]
+
+    @staticmethod
+    def _extract_text_from_message_content(content: Any) -> str:
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+            return "".join(parts)
+        if isinstance(content, str):
+            return content
+        return str(content)
+
+    @staticmethod
+    def _build_imagine_prompt(messages: List[Dict]) -> str:
+        """为 grok-imagine 构建干净的 prompt。
+
+        imagine 容易回显 prompt。这里避免注入 <turn> / [image att:n] 等结构化标记，
+        仅用 System/User/Assistant 纯文本序列化历史，并在末尾给出当前指令。
+        """
+        # 提取最后一条 user 文本作为当前指令
+        last_user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_text = GrokClient._extract_text_from_message_content(m.get("content", ""))
+                break
+
+        lines: List[str] = []
+        for m in messages:
+            role = m.get("role", "user")
+            text = GrokClient._extract_text_from_message_content(m.get("content", ""))
+            if not text:
+                continue
+
+            if role == "system":
+                lines.append(f"System: {text}")
+            elif role == "assistant":
+                lines.append(f"Assistant: {text}")
+            else:
+                # user
+                lines.append(f"User: {text}")
+
+        # 避免重复：末尾单独给当前指令，帮助 imagine 聚焦
+        if last_user_text:
+            lines.append("\nCurrent instruction:\n" + last_user_text)
+
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _dedupe_keep_order(items: Iterable[str]) -> List[str]:

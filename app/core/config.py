@@ -37,7 +37,14 @@ DEFAULT_GLOBAL = {
     "max_upload_concurrency": 20,  # 最大并发上传数
     "max_request_concurrency": 50,  # 最大并发请求数
     "batch_save_interval": 1.0,  # 批量保存间隔（秒）
-    "batch_save_threshold": 10  # 触发批量保存的变更数阈值
+    "batch_save_threshold": 10,  # 触发批量保存的变更数阈值
+
+    # ===== 调试请求日志（默认关闭） =====
+    # 目的：定位问题时保存完整请求/转换结果（URL 优先，base64 会截断）
+    "debug_request_log": False,
+    "debug_request_log_dir": "/app/logs/requests",
+    "debug_request_log_max_total_bytes": 104857600,  # 100MB
+    "debug_request_log_base64_keep": 512,
 }
 
 
