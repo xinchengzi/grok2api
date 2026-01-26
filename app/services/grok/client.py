@@ -255,33 +255,15 @@ class GrokClient:
         imagine 容易回显 prompt。这里避免注入 <turn> / [image att:n] 等结构化标记，
         仅用 System/User/Assistant 纯文本序列化历史，并在末尾给出当前指令。
         """
-        # 提取最后一条 user 文本作为当前指令
+        # imagine 连续编辑对“历史文本”非常敏感，容易回显导致体验像异常。
+        # 这里仅发送最后一条 user 文本作为编辑指令（不包含任何历史记录）。
         last_user_text = ""
         for m in reversed(messages):
             if m.get("role") == "user":
                 last_user_text = GrokClient._extract_text_from_message_content(m.get("content", ""))
                 break
 
-        lines: List[str] = []
-        for m in messages:
-            role = m.get("role", "user")
-            text = GrokClient._extract_text_from_message_content(m.get("content", ""))
-            if not text:
-                continue
-
-            if role == "system":
-                lines.append(f"System: {text}")
-            elif role == "assistant":
-                lines.append(f"Assistant: {text}")
-            else:
-                # user
-                lines.append(f"User: {text}")
-
-        # 避免重复：末尾单独给当前指令，帮助 imagine 聚焦
-        if last_user_text:
-            lines.append("\nCurrent instruction:\n" + last_user_text)
-
-        return "\n".join(lines).strip()
+        return (last_user_text or "").strip()
 
     @staticmethod
     def _dedupe_keep_order(items: Iterable[str]) -> List[str]:
