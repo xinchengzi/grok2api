@@ -4,7 +4,7 @@ import asyncio
 import re
 import orjson
 import time
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any, Optional, Iterable
 from curl_cffi import requests as curl_requests
 
 from app.core.config import setting
@@ -52,7 +52,7 @@ class GrokClient:
     async def openai_to_grok(request: dict):
         """转换OpenAI请求为Grok请求"""
         model = request["model"]
-        content, images, has_user_uploaded = GrokClient._extract_content(request["messages"])
+        segments, image_urls, has_user_uploaded, user_image_urls = GrokClient._extract_content(request["messages"])
         stream = request.get("stream", False)
         
         # 获取模型信息
@@ -62,16 +62,20 @@ class GrokClient:
         # 视频生成模式：只有当用户主动上传图片时才启用
         # 如果只是历史生成的图片（用于连续对话修改），走标准图片生成流程
         is_video = info.get("is_video_model", False) and has_user_uploaded
-        
-        # 视频模型限制
-        if is_video and len(images) > 1:
-            logger.warning(f"[Client] 视频模型仅支持1张图片，已截取前1张")
-            images = images[:1]
-        
-        return await GrokClient._retry(model, content, images, grok_model, mode, is_video, stream)
+
+        return await GrokClient._retry(model, segments, image_urls, user_image_urls, grok_model, mode, is_video, stream)
 
     @staticmethod
-    async def _retry(model: str, content: str, images: List[str], grok_model: str, mode: str, is_video: bool, stream: bool):
+    async def _retry(
+        model: str,
+        segments: List["GrokClient._Segment"],
+        image_urls: List[str],
+        user_image_urls: List[str],
+        grok_model: str,
+        mode: str,
+        is_video: bool,
+        stream: bool,
+    ):
         """重试请求"""
         from app.core.proxy_pool import proxy_pool
         
@@ -87,15 +91,39 @@ class GrokClient:
                 
                 # 获取当前使用的代理
                 proxy_used = await proxy_pool.get_proxy_for_sso(sso_token) or ""
-                
-                img_ids, img_uris = await GrokClient._upload(images, token)
+
+                # 决定本次真正要上传/绑定的图片集合
+                # - 普通对话：保留全部历史图片（按出现顺序）
+                # - 视频模型：仅使用“最后一张用户上传图片”，避免历史图片干扰
+                images_to_use = image_urls
+                if is_video:
+                    if user_image_urls:
+                        images_to_use = [user_image_urls[-1]]
+                    else:
+                        images_to_use = []
+
+                unique_urls = GrokClient._dedupe_keep_order(images_to_use)
+                upload_map = await GrokClient._upload(unique_urls, token)
+
+                img_ids: List[str] = []
+                img_uris: List[str] = []
+                url_to_att_index: Dict[str, int] = {}
+                for url in unique_urls:
+                    fid, furi = upload_map.get(url, (None, None))
+                    if not fid:
+                        continue
+                    url_to_att_index[url] = len(img_ids) + 1
+                    img_ids.append(fid)
+                    img_uris.append(furi or "")
+
+                rendered_content = GrokClient._render_segments(segments, url_to_att_index)
 
                 # 视频模型创建会话
-                post_id = None
+                post_id: Optional[str] = None
                 if is_video and img_ids and img_uris:
                     post_id = await GrokClient._create_post(img_ids[0], img_uris[0], token)
 
-                payload = GrokClient._build_payload(content, grok_model, mode, img_ids, img_uris, is_video, post_id)
+                payload = GrokClient._build_payload(rendered_content, grok_model, mode, img_ids, img_uris, is_video, post_id)
                 result = await GrokClient._request(payload, token, model, stream, post_id)
                 media_urls = []
                 if not stream and isinstance(result, tuple):
@@ -173,101 +201,143 @@ class GrokClient:
         
         raise last_err or GrokApiException("请求失败", "REQUEST_ERROR")
 
-    # 从 markdown 中提取图片 URL 的正则
-    _IMG_PATTERN = re.compile(r'!\[.*?\]\((https?://[^\s\)]+)\)')
+    # 从 markdown 中提取图片 URL 的正则（仅用于 assistant 历史里生成图的绑定）
+    _IMG_PATTERN = re.compile(r'!\[(?P<alt>.*?)\]\((?P<url>https?://[^\s\)]+)\)')
+
+    _Segment = Tuple[str, str]
 
     @staticmethod
-    def _extract_content(messages: List[Dict]) -> Tuple[str, List[str], bool]:
-        """提取文本和图片 - 格式化多轮对话（改进版）
-        
-        支持从 assistant 历史消息中提取生成的图片，用于连续对话修改图片场景。
-        
-        Returns:
-            (text, images, has_user_uploaded_images) 元组
-            - text: 格式化后的文本
-            - images: 所有图片 URL 列表
-            - has_user_uploaded_images: 是否有用户主动上传的图片（用于区分视频生成场景）
+    def _dedupe_keep_order(items: Iterable[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for it in items:
+            if it in seen:
+                continue
+            seen.add(it)
+            out.append(it)
+        return out
+
+    @staticmethod
+    def _should_bind_markdown_image(url: str) -> bool:
+        # 只绑定我们缓存的图片或 Grok 原始图片（用于连续对话图片编辑/引用）
+        return ("/images/" in url) or ("assets.grok.com" in url)
+
+    @staticmethod
+    def _render_segments(segments: List["GrokClient._Segment"], url_to_att_index: Dict[str, int]) -> str:
+        """将结构化 segments 渲染为上游 message 字符串。
+
+        上游接口只接受 message(string)+fileAttachments(list)，因此必须用占位符把图片与轮次绑定。
         """
-        parts, images = [], []
-        has_user_uploaded_images = False  # 用户是否主动上传了图片
-        
-        # 是否有多条消息（需要格式化）
-        need_format = len(messages) > 1
-        
+        out: List[str] = []
+        for kind, val in segments:
+            if kind == "text":
+                out.append(val)
+            elif kind == "image":
+                idx = url_to_att_index.get(val)
+                if idx is None:
+                    out.append("\n[image unavailable]\n")
+                else:
+                    out.append(f"\n[image att:{idx}]\n")
+        return "".join(out).strip()
+
+    @staticmethod
+    def _extract_content(messages: List[Dict]) -> Tuple[List["GrokClient._Segment"], List[str], bool, List[str]]:
+        """按 OpenAI messages 原始顺序提取内容，并将图片与轮次位置绑定。
+
+        上游 Grok 接口只支持 message(string)+fileAttachments(list)，因此这里必须把 role/顺序显式编码进 message，
+        并用占位符引用附件序号，避免“中途发图但模型不知道看哪张”。
+
+        Returns:
+            (segments, image_urls_in_order, has_user_uploaded_images, user_image_urls_in_order)
+        """
+        segments: List[GrokClient._Segment] = []
+        image_urls_in_order: List[str] = []
+        user_image_urls_in_order: List[str] = []
+        has_user_uploaded_images = False
+
         for i, msg in enumerate(messages):
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            
-            # 处理多模态内容（OpenAI Vision 格式）- 用户主动上传的图片
+
+            # turn header（不做“历史/当前问题”改写，保持原顺序）
+            segments.append(("text", f"<turn i=\"{i+1}\" role=\"{role}\">\n"))
+
             if isinstance(content, list):
-                text_parts = []
                 for item in content:
+                    if not isinstance(item, dict):
+                        continue
                     if item.get("type") == "text":
-                        text_parts.append(item.get("text", ""))
+                        text = item.get("text", "")
+                        if text:
+                            segments.append(("text", text))
                     elif item.get("type") == "image_url":
-                        if url := item.get("image_url", {}).get("url"):
-                            images.append(url)
-                            has_user_uploaded_images = True  # 标记用户主动上传了图片
-                content = "".join(text_parts)
-            
-            # 从 assistant 的历史回复中提取生成的图片 URL
-            # 这样在连续对话中，Grok 可以看到之前生成的图片
-            # 注意：这些是历史生成的图片，不是用户主动上传的
-            if role == "assistant" and isinstance(content, str):
-                for url in GrokClient._IMG_PATTERN.findall(content):
-                    # 只提取我们缓存的图片或 Grok 原始图片
-                    if "/images/" in url or "assets.grok.com" in url:
-                        images.append(url)
-            
-            if not content.strip():
-                continue
-            
-            # 单条消息不需要格式化
-            if not need_format:
-                parts.append(content)
+                        url = item.get("image_url", {}).get("url")
+                        if not url:
+                            continue
+                        image_urls_in_order.append(url)
+                        segments.append(("image", url))
+                        if role == "user":
+                            has_user_uploaded_images = True
+                            user_image_urls_in_order.append(url)
             else:
-                # 多条消息需要格式化
-                is_last = (i == len(messages) - 1)
-                
-                if role == "system":
-                    parts.append(f"[系统指令]: {content}")
-                elif role == "user":
-                    if is_last:
-                        parts.append(f"[当前问题]: {content}")
-                    else:
-                        parts.append(f"[历史用户消息]: {content}")
-                elif role == "assistant":
-                    parts.append(f"[历史AI回复]: {content}")
-        
-        # 添加指导语（仅多轮对话）
-        if need_format:
-            parts.append("\n[注意：请根据以上对话历史回答当前问题，不要重复历史回复中的内容。]")
-        
-        return "\n".join(parts), images, has_user_uploaded_images
+                text = content if isinstance(content, str) else str(content)
+
+                # assistant 历史里如果包含 markdown 图片链接，则将其替换为 image 占位符并绑定附件
+                if role == "assistant" and isinstance(text, str):
+                    last_pos = 0
+                    for m in GrokClient._IMG_PATTERN.finditer(text):
+                        url = m.group("url")
+                        if not url or not GrokClient._should_bind_markdown_image(url):
+                            continue
+                        before = text[last_pos:m.start()]
+                        if before:
+                            segments.append(("text", before))
+                        image_urls_in_order.append(url)
+                        segments.append(("image", url))
+                        last_pos = m.end()
+                    rest = text[last_pos:]
+                    if rest:
+                        segments.append(("text", rest))
+                else:
+                    if text:
+                        segments.append(("text", text))
+
+            # turn footer
+            segments.append(("text", "\n</turn>\n"))
+
+        return segments, image_urls_in_order, has_user_uploaded_images, user_image_urls_in_order
 
     @staticmethod
-    async def _upload(urls: List[str], token: str) -> Tuple[List[str], List[str]]:
-        """并发上传图片"""
+    async def _upload(urls: List[str], token: str) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+        """并发上传图片。
+
+        Returns:
+            dict[url] -> (file_id, file_uri)；失败为 (None, None)
+        """
         if not urls:
-            return [], []
+            return {}
         
         async def upload_limited(url):
             async with GrokClient._get_upload_semaphore():
                 return await ImageUploadManager.upload(url, token)
         
         results = await asyncio.gather(*[upload_limited(u) for u in urls], return_exceptions=True)
-        
-        ids, uris = [], []
+
+        out: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
         for url, result in zip(urls, results):
             if isinstance(result, Exception):
                 logger.warning(f"[Client] 上传失败: {url} - {result}")
+                out[url] = (None, None)
             elif isinstance(result, tuple) and len(result) == 2:
                 fid, furi = result
                 if fid:
-                    ids.append(fid)
-                    uris.append(furi)
-        
-        return ids, uris
+                    out[url] = (fid, furi)
+                else:
+                    out[url] = (None, None)
+            else:
+                out[url] = (None, None)
+
+        return out
 
     @staticmethod
     async def _create_post(file_id: str, file_uri: str, token: str) -> Optional[str]:
@@ -281,7 +351,15 @@ class GrokClient:
         return None
 
     @staticmethod
-    def _build_payload(content: str, model: str, mode: str, img_ids: List[str], img_uris: List[str], is_video: bool = False, post_id: str = None) -> Dict:
+    def _build_payload(
+        content: str,
+        model: str,
+        mode: str,
+        img_ids: List[str],
+        img_uris: List[str],
+        is_video: bool = False,
+        post_id: Optional[str] = None,
+    ) -> Dict:
         """构建请求载荷"""
         # 视频模型特殊处理
         if is_video and img_uris:
@@ -322,7 +400,7 @@ class GrokClient:
         }
 
     @staticmethod
-    async def _request(payload: dict, token: str, model: str, stream: bool, post_id: str = None):
+    async def _request(payload: dict, token: str, model: str, stream: bool, post_id: Optional[str] = None):
         """发送请求"""
         if not token:
             raise GrokApiException("认证令牌缺失", "NO_AUTH_TOKEN")
