@@ -4,6 +4,7 @@ import orjson
 import uuid
 import time
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncGenerator, Tuple, Optional
 
@@ -271,7 +272,12 @@ class GrokResponseProcessor:
                     finish_reason=finish
                 )]
             )
-            return f"data: {chunk_data.model_dump_json()}\n\n"
+            # NOTE:
+            # 部分上游/中间层（例如某些 new-api 代理）会错误按非 UTF-8/按字节截断转发 SSE，
+            # 导致包含中文/emoji 的 JSON 字符串被拆坏（出现 Unterminated string / 乱码）。
+            # 这里改为 ASCII 安全输出：将 Unicode 统一转义为 \uXXXX，确保每条 data 行只包含 ASCII。
+            payload = json.dumps(chunk_data.model_dump(exclude_none=True), ensure_ascii=True, separators=(",", ":"))
+            return f"data: {payload}\n\n"
 
         try:
             # 使用带超时的异步迭代器，解决 iter_lines() 阻塞导致超时检测失效的问题
