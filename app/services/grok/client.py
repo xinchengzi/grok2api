@@ -233,6 +233,8 @@ class GrokClient:
 
     # 从 markdown 中提取图片 URL 的正则（仅用于 assistant 历史里生成图的绑定）
     _IMG_PATTERN = re.compile(r'!\[(?P<alt>.*?)\]\((?P<url>https?://[^\s\)]+)\)')
+    _ATTACHED_FILES_BLOCK = re.compile(r"(?s)<attached_files>.*?</attached_files>\s*")
+    _ATTACHED_FILE_TAG = re.compile(r"<file\s+[^>]*?/>")
 
     _Segment = Tuple[str, str]
 
@@ -243,10 +245,25 @@ class GrokClient:
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
                     parts.append(item.get("text", ""))
-            return "".join(parts)
+            return GrokClient._sanitize_user_text("".join(parts))
         if isinstance(content, str):
-            return content
+            return GrokClient._sanitize_user_text(content)
         return str(content)
+
+    @staticmethod
+    def _sanitize_user_text(text: str) -> str:
+        """清理 Open WebUI 注入的附件占位文本。
+
+        Open WebUI 常在 text 段里注入：
+          <attached_files>\n<file .../>\n</attached_files>
+        这对模型是噪声，且在图像编辑/生成路径下容易被模型回显，导致看起来“回复错乱”。
+        """
+        if not text:
+            return ""
+        t = text
+        t = GrokClient._ATTACHED_FILES_BLOCK.sub("", t)
+        t = GrokClient._ATTACHED_FILE_TAG.sub("", t)
+        return t.strip()
 
     @staticmethod
     def _build_imagine_prompt(messages: List[Dict]) -> str:
@@ -326,7 +343,7 @@ class GrokClient:
                     if not isinstance(item, dict):
                         continue
                     if item.get("type") == "text":
-                        text = item.get("text", "")
+                        text = GrokClient._sanitize_user_text(item.get("text", ""))
                         if text:
                             segments.append(("text", text))
                     elif item.get("type") == "image_url":
