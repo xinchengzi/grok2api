@@ -304,6 +304,8 @@ class GrokClient:
 
         上游接口只接受 message(string)+fileAttachments(list)，因此必须用占位符把图片与轮次绑定。
         """
+        # 单轮对话时我们不会生成 <turn>；多轮才有。用它作为是否插入图片占位符的开关。
+        has_turn_wrapper = any(kind == "text" and "<turn " in val for kind, val in segments)
         out: List[str] = []
         for kind, val in segments:
             if kind == "text":
@@ -313,7 +315,10 @@ class GrokClient:
                 if idx is None:
                     out.append("\n[image unavailable]\n")
                 else:
-                    out.append(f"\n[image att:{idx}]\n")
+                    # 单轮对话：不插入 [image att:N]，避免模型回显结构化 prompt。
+                    # 多轮对话：保留占位符用于“图片-轮次-问题”绑定。
+                    if has_turn_wrapper:
+                        out.append(f"\n[image att:{idx}]\n")
         return "".join(out).strip()
 
     @staticmethod
@@ -331,12 +336,15 @@ class GrokClient:
         user_image_urls_in_order: List[str] = []
         has_user_uploaded_images = False
 
+        need_turn_wrapper = len(messages) > 1
+
         for i, msg in enumerate(messages):
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
-            # turn header（不做“历史/当前问题”改写，保持原顺序）
-            segments.append(("text", f"<turn i=\"{i+1}\" role=\"{role}\">\n"))
+            # 单轮：不输出 <turn> wrapper（降低模型回显 prompt 的概率）
+            if need_turn_wrapper:
+                segments.append(("text", f"<turn i=\"{i+1}\" role=\"{role}\">\n"))
 
             if isinstance(content, list):
                 for item in content:
@@ -378,8 +386,8 @@ class GrokClient:
                     if text:
                         segments.append(("text", text))
 
-            # turn footer
-            segments.append(("text", "\n</turn>\n"))
+            if need_turn_wrapper:
+                segments.append(("text", "\n</turn>\n"))
 
         return segments, image_urls_in_order, has_user_uploaded_images, user_image_urls_in_order
 
