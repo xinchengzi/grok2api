@@ -1218,6 +1218,12 @@ async def admin_cache_page():
     return await render_template("cache/cache.html")
 
 
+@router.get("/admin/logs", response_class=HTMLResponse, include_in_schema=False)
+async def admin_logs_page():
+    """调用日志页"""
+    return await render_template("logs/logs.html")
+
+
 @router.get("/api/v1/admin/cache", dependencies=[Depends(verify_api_key)])
 async def get_cache_stats_api(request: Request):
     """获取缓存统计"""
