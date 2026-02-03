@@ -462,9 +462,17 @@ class ChatService:
                 status_code=429,
             )
 
-        # 解析参数
-        think = {"enabled": True, "disabled": False}.get(thinking)
-        is_stream = stream if stream is not None else get_config("chat.stream")
+        # 解析参数：默认隐藏思考过程
+        # - 非 thinking 模型：默认走 chat.thinking 配置
+        # - *-thinking 模型：默认隐藏（除非 thinking=enabled）
+        if thinking == "enabled":
+            think = True
+        elif thinking == "disabled":
+            think = False
+        else:
+            think = False if str(model).endswith("-thinking") else get_config("chat.thinking", False)
+
+        is_stream = stream if stream is not None else get_config("chat.stream", True)
 
         # 构造请求
         chat_request = ChatRequest(
