@@ -5,7 +5,11 @@ Grok Chat 服务
 import asyncio
 import re
 import uuid
-from typing import Dict, List, Any, AsyncGenerator, AsyncIterable
+import base64
+import mimetypes
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+from typing import Dict, List, Any, AsyncGenerator, AsyncIterable, Optional
 
 import orjson
 from curl_cffi.requests.errors import RequestsError
@@ -240,6 +244,77 @@ class MessageExtractor:
             base = image_attachments[-1] if image_attachments else None
         return [base] if base else []
 
+    @staticmethod
+    def _extract_last_image_url_from_text(text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        # Markdown image: ![alt](url)
+        md_matches = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
+        if md_matches:
+            return md_matches[-1].strip()
+
+        # HTML image: <img src="...">
+        html_matches = re.findall(r"<img\s+[^>]*?src=[\"']([^\"']+)[\"']", text)
+        if html_matches:
+            return html_matches[-1].strip()
+
+        return None
+
+    @staticmethod
+    def find_last_assistant_image_url(messages: List[Dict[str, Any]]) -> Optional[str]:
+        """Find last image URL from assistant messages (generated image markdown/html)."""
+        for msg in reversed(messages or []):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                url = MessageExtractor._extract_last_image_url_from_text(content)
+                if url:
+                    return url
+            elif isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                url = MessageExtractor._extract_last_image_url_from_text("\n".join(parts))
+                if url:
+                    return url
+        return None
+
+    @staticmethod
+    def _local_cached_image_data_uri_from_files_url(url: str) -> Optional[str]:
+        """If url points to our /v1/files/image/*, load cached file and return data URI."""
+        if not url or not isinstance(url, str):
+            return None
+        if url.startswith("data:"):
+            return url
+
+        try:
+            parsed = urlparse(url)
+            path = parsed.path or ""
+        except Exception:
+            return None
+
+        marker = "/v1/files/image/"
+        idx = path.find(marker)
+        if idx < 0:
+            return None
+
+        file_path = unquote(path[idx + len(marker):]).lstrip("/")
+        if not file_path:
+            return None
+
+        filename = file_path.replace("/", "-")
+        base_dir = Path(__file__).parent.parent.parent.parent / "data" / "tmp" / "image"
+        local_path = base_dir / filename
+        if not local_path.exists() or not local_path.is_file():
+            return None
+
+        mime_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+        b64_data = base64.b64encode(local_path.read_bytes()).decode()
+        return f"data:{mime_type};base64,{b64_data}"
+
 
 class GrokChatService:
     """Grok API 调用服务"""
@@ -319,9 +394,19 @@ class GrokChatService:
 
         # imagine 连续编辑规则：只绑定一张基图
         if str(model).startswith("grok-imagine"):
-            image_attachments = MessageExtractor.select_imagine_base_image(
+            base_images = MessageExtractor.select_imagine_base_image(
                 image_attachments=image_attachments, user_image_urls=user_image_urls
             )
+
+            # 若用户没有显式上传图片，则尝试用"上一轮生成图"作为基图
+            if not base_images:
+                last_url = MessageExtractor.find_last_assistant_image_url(messages)
+                if last_url:
+                    data_uri = MessageExtractor._local_cached_image_data_uri_from_files_url(last_url)
+                    base_images = [data_uri or last_url]
+
+            image_attachments = base_images
+
             # imagine：只发送最后一条 user 文本指令（不带历史格式化）
             for msg in reversed(messages or []):
                 if msg.get("role") == "user":
@@ -335,6 +420,10 @@ class GrokChatService:
                     elif isinstance(content, str):
                         message = content.strip()
                     break
+
+            # 强制触发生图：沿用 /v1/images/generations 的前缀约定
+            if message and not message.lower().startswith("image generation:"):
+                message = f"Image Generation:{message}"
 
         # 上传附件
         file_ids: List[str] = []
