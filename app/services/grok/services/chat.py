@@ -24,6 +24,8 @@ from app.services.grok.utils.retry import retry_on_status
 from app.services.grok.utils.headers import apply_statsig, build_sso_cookie
 from app.services.grok.utils.stream import wrap_stream_with_usage
 from app.services.token import get_token_manager, EffortType
+from app.services.call_log import call_log_service
+from app.services.request_debug_log import request_debug_log_service
 
 
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
@@ -79,6 +81,8 @@ class MessageExtractor:
 
         # 用于将图片附件绑定到对话轮次：在文本中插入占位符 [image att:N]
         image_att_index = 0
+        # 用于 decide user uploaded image vs history image
+        user_image_urls: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "")
@@ -112,6 +116,8 @@ class MessageExtractor:
                         )
                         if url:
                             attachments.append(("image", url))
+                            if role == "user":
+                                user_image_urls.append(url)
                             image_att_index += 1
                             # 旧版：在文本中按出现顺序插入占位符，保证图片-轮次-问题绑定
                             parts.append(f"[image att:{image_att_index}]")
@@ -185,6 +191,24 @@ class MessageExtractor:
             message = re.sub(r"\[image att:\d+\]", "", message)
             message = re.sub(r"\n{3,}", "\n\n", message).strip()
         return message, attachments
+
+    @staticmethod
+    def select_imagine_base_image(
+        *,
+        attachments: List[tuple[str, str]],
+        user_image_urls: List[str],
+    ) -> List[tuple[str, str]]:
+        """旧版 imagine 连续编辑：只绑定一张“基图”。
+
+        规则：用户最后上传图优先，否则取历史最后一张图；如果没有图则返回空。
+        """
+        # only images
+        imgs = [a for a in attachments if a and a[0] == "image"]
+        if user_image_urls:
+            base = user_image_urls[-1]
+        else:
+            base = imgs[-1][1] if imgs else None
+        return [("image", base)] if base else []
 
     @staticmethod
     def extract_text_only(messages: List[Dict[str, Any]]) -> str:
@@ -436,6 +460,7 @@ class GrokChatService:
             request.stream if request.stream is not None else get_config("chat.stream")
         )
 
+        payload_debug = None
         response = await self.chat(
             token,
             message,
@@ -446,11 +471,63 @@ class GrokChatService:
             image_attachments=[],
         )
 
+        # 调试请求日志（默认关闭）
+        try:
+            payload_debug = ChatRequestBuilder.build_payload(
+                message,
+                grok_model,
+                mode,
+                think,
+                file_attachments=file_ids,
+                image_attachments=image_ids,
+            )
+            await request_debug_log_service.log(
+                openai_request={"model": request.model, "messages": request.messages, "stream": stream, "thinking": request.think},
+                grok_payload=payload_debug,
+                meta={"model": request.model, "grok_model": grok_model, "mode": mode, "stream": stream},
+            )
+        except Exception:
+            pass
+
         return response, stream, request.model
 
 
 class ChatService:
     """Chat 业务服务"""
+
+    @staticmethod
+    async def _wrap_stream(stream, token_mgr, token: str, model: str):
+        """包装流式响应，在完成时记录使用"""
+        success = False
+        try:
+            async for chunk in stream:
+                yield chunk
+            success = True
+        finally:
+            if success:
+                try:
+                    model_info = ModelService.get(model)
+                    effort = (
+                        EffortType.HIGH
+                        if (model_info and model_info.cost.value == "high")
+                        else EffortType.LOW
+                    )
+                    await token_mgr.consume(token, effort)
+                    try:
+                        call_log_service.queue_call(
+                            sso=str(token)[:20],
+                            model=model,
+                            success=True,
+                            status_code=200,
+                            response_time=0.0,
+                        )
+                    except Exception:
+                        pass
+                    logger.debug(
+                        f"Stream completed, recorded usage for token {token[:10]}... (effort={effort.value})"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record stream usage: {e}")
 
     @staticmethod
     async def completions(
@@ -518,6 +595,16 @@ class ChatService:
                 else EffortType.LOW
             )
             await token_mgr.consume(token, effort)
+            try:
+                call_log_service.queue_call(
+                    sso=str(token)[:20],
+                    model=model,
+                    success=True,
+                    status_code=200,
+                    response_time=0.0,
+                )
+            except Exception:
+                pass
             logger.info(f"Chat completed: model={model}, effort={effort.value}")
         except Exception as e:
             logger.warning(f"Failed to record usage: {e}")

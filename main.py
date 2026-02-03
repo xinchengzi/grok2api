@@ -30,6 +30,7 @@ from app.api.v1.image import router as image_router  # noqa: E402
 from app.api.v1.files import router as files_router  # noqa: E402
 from app.api.v1.models import router as models_router  # noqa: E402
 from app.services.token import get_scheduler  # noqa: E402
+from app.services.call_log import call_log_service  # noqa: E402
 
 
 # 初始化日志
@@ -63,6 +64,12 @@ async def lifespan(app: FastAPI):
         interval = min(basic_interval, super_interval)
         scheduler = get_scheduler(interval)
         scheduler.start()
+
+    # 4. 启动调用日志服务
+    try:
+        await call_log_service.start()
+    except Exception as e:
+        logger.warning(f"CallLog service start failed: {e}")
 
     logger.info("Application startup complete.")
     yield

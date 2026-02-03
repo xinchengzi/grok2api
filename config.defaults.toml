@@ -11,6 +11,7 @@ image_format = "url"
 # 生成视频的格式（html 或 url）
 video_format = "html"
 
+<<<<<<< HEAD
 
 # ==================== 网络配置 ====================
 [network]
@@ -84,6 +85,12 @@ image_ws_blocked_seconds = 15
 image_ws_final_min_bytes = 100000
 # 判定为中等质量图的最小字节数
 image_ws_medium_min_bytes = 30000
+
+# 调试请求日志（默认关闭）
+debug_request_log = false
+debug_request_log_dir = "/app/logs/requests"
+debug_request_log_max_total_bytes = 104857600
+debug_request_log_base64_keep = 512
 
 
 # ==================== Token 池管理 ====================
