@@ -220,6 +220,12 @@ class StreamProcessor(BaseProcessor):
                                 or "结论" in stripped
                             )
 
+                            # 非思考 token 一旦出现，认为已进入最终答复
+                            if self._in_thinking and (not looks_like_thinking) and stripped.strip():
+                                self._in_thinking = False
+                                if self.show_think:
+                                    yield self._sse("\n</think>\n")
+
                             if not self._in_thinking and looks_like_thinking and not looks_like_final_marker:
                                 self._in_thinking = True
                                 if self.show_think:
