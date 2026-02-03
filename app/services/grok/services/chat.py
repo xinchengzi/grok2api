@@ -299,8 +299,9 @@ class GrokChatService:
                     logger.debug(f"Attachment uploaded: type=file, file_id={file_id}")
                 for attach_data in image_attachments:
                     file_id, _ = await upload_service.upload_file(attach_data, token)
-                    image_ids.append(file_id)
-                    logger.debug(f"Attachment uploaded: type=image, file_id={file_id}")
+                    # 图片也走 fileAttachments（Grok Web 对 fileAttachments 兼容更好）
+                    file_ids.append(file_id)
+                    logger.debug(f"Image uploaded (as fileAttachment): file_id={file_id}")
             finally:
                 await upload_service.close()
 
