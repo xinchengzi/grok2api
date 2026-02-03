@@ -177,7 +177,20 @@ class MessageExtractor:
         if is_multi_turn:
             texts.append(MessageExtractor._NO_REPEAT_HINT)
 
-        return "\n\n".join(texts), attachments
+        # 换行拼接文本
+        message = "\n\n".join(texts)
+
+        # 单轮对话不输出图片占位符
+        if not is_multi_turn and image_att_index:
+            message = re.sub(r"\[image att:\d+\]", "", message)
+            message = re.sub(r"\n{3,}", "\n\n", message).strip()
+        return message, attachments
+
+    @staticmethod
+    def extract_text_only(messages: List[Dict[str, Any]]) -> str:
+        """仅提取文本内容"""
+        text, _ = MessageExtractor.extract(messages, is_video=True)
+        return text
 
 
 class ChatRequestBuilder:
