@@ -2,62 +2,44 @@
 <html lang="zh-CN">
 
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>调用日志 - Grok2API</title>
-  <link rel="icon" href="/static/favicon/favicon.ico" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@unocss/reset/tailwind.min.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 调用日志</title>
+  <link rel="icon" href="/static/common/img/favicon/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/common/header.css" />
-  <link rel="stylesheet" href="/static/common/footer.css" />
-  <link rel="stylesheet" href="/static/common/toast.css" />
-  <script src="/static/common/admin-auth.js"></script>
-  <script src="/static/common/toast.js"></script>
-  <script src="/static/common/header.js"></script>
-  <script src="/static/common/footer.js"></script>
-  <script src="/static/admin/js/logs.js"></script>
-  <style>
-    :root {
-      --bg: #f8fafc;
-      --card: #ffffff;
-      --border: #e5e7eb;
-      --accents-4: #6b7280;
-    }
-
-    body {
-      background: var(--bg);
-      color: #0f172a;
-    }
-  </style>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
+  <link href="/static/common/css/common.css" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
 </head>
 
-<body>
-  <div id="header-container"></div>
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
 
-  <main class="max-w-5xl mx-auto px-6 pt-20 pb-16">
-    <div class="flex items-start justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-xl font-semibold">调用日志</h1>
-        <p class="text-sm text-[var(--accents-4)] mt-1">查看 /v1 接口调用记录（分页、筛选、清理）。</p>
+  <main class="space-y-6 flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in">
+    <div class="space-y-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">调用日志</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">查看 API 调用记录（分页、筛选、清空）。</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="geist-button-outline" onclick="refreshLogs()">刷新</button>
+          <button class="geist-button-outline" onclick="clearLogs()">清空</button>
+        </div>
       </div>
-      <div class="flex items-center gap-2">
-        <button id="btn-refresh" class="px-3 py-2 rounded-md border border-[var(--border)] bg-white text-sm"
-          onclick="refreshLogs()">刷新</button>
-        <button id="btn-clear" class="px-3 py-2 rounded-md border border-red-200 bg-red-50 text-sm text-red-700"
-          onclick="clearLogs()">清空</button>
-      </div>
-    </div>
 
-    <section class="bg-white border border-[var(--border)] rounded-xl p-4">
+      <div class="h-px bg-[var(--border)] my-6"></div>
+
       <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div>
           <label class="text-xs text-[var(--accents-4)]">模型</label>
-          <input id="filter-model" class="mt-1 w-full px-3 py-2 rounded-md border border-[var(--border)]"
-            placeholder="例如 grok-4" />
+          <input id="filter-model" class="mt-1 w-full geist-input" placeholder="例如 grok-4-fast" />
         </div>
         <div>
           <label class="text-xs text-[var(--accents-4)]">成功</label>
-          <select id="filter-success" class="mt-1 w-full px-3 py-2 rounded-md border border-[var(--border)]">
+          <select id="filter-success" class="mt-1 w-full geist-input">
             <option value="">全部</option>
             <option value="true">成功</option>
             <option value="false">失败</option>
@@ -65,56 +47,50 @@
         </div>
         <div>
           <label class="text-xs text-[var(--accents-4)]">每页</label>
-          <select id="filter-page-size" class="mt-1 w-full px-3 py-2 rounded-md border border-[var(--border)]">
+          <select id="filter-page-size" class="mt-1 w-full geist-input">
             <option value="50">50</option>
             <option value="100">100</option>
             <option value="200">200</option>
           </select>
         </div>
         <div class="flex items-end">
-          <button class="w-full px-3 py-2 rounded-md border border-[var(--border)] bg-white"
-            onclick="applyFilters()">应用筛选</button>
+          <button class="geist-button-outline w-full" onclick="applyFilters()">应用筛选</button>
         </div>
       </div>
-    </section>
 
-    <section class="mt-4 bg-white border border-[var(--border)] rounded-xl">
-      <div class="p-4 flex items-center justify-between">
-        <div class="text-sm text-[var(--accents-4)]">
-          总计 <span id="total-count">0</span> 条
-        </div>
+      <div class="flex items-center justify-between pt-2">
+        <div class="text-sm text-[var(--accents-4)]">总计 <span id="total-count">0</span> 条</div>
         <div class="flex items-center gap-2">
-          <button class="px-3 py-2 text-sm rounded-md border border-[var(--border)] bg-white" onclick="prevPage()">上一页</button>
+          <button class="geist-button-outline" onclick="prevPage()">上一页</button>
           <span class="text-sm text-[var(--accents-4)]">第 <span id="page-number">1</span> 页</span>
-          <button class="px-3 py-2 text-sm rounded-md border border-[var(--border)] bg-white" onclick="nextPage()">下一页</button>
+          <button class="geist-button-outline" onclick="nextPage()">下一页</button>
         </div>
       </div>
-      <div class="overflow-auto">
-        <table class="min-w-full text-sm">
-          <thead class="bg-slate-50 border-t border-b border-[var(--border)]">
+
+      <div class="rounded-lg overflow-hidden bg-white overflow-x-auto">
+        <table class="geist-table min-w-[1000px]">
+          <thead>
             <tr>
-              <th class="text-left font-medium px-4 py-3">时间</th>
-              <th class="text-left font-medium px-4 py-3">模型</th>
-              <th class="text-left font-medium px-4 py-3">状态</th>
-              <th class="text-left font-medium px-4 py-3">耗时</th>
-              <th class="text-left font-medium px-4 py-3">Token</th>
-              <th class="text-left font-medium px-4 py-3">错误</th>
+              <th class="w-56 text-left">时间</th>
+              <th class="w-48 text-left">模型</th>
+              <th class="w-24 text-left">状态</th>
+              <th class="w-28 text-left">耗时</th>
+              <th class="w-40 text-left">Token</th>
+              <th class="w-56 text-left">代理</th>
+              <th class="text-left">错误</th>
             </tr>
           </thead>
           <tbody id="logs-tbody"></tbody>
         </table>
       </div>
-    </section>
+    </div>
   </main>
 
-  <div id="footer-container"></div>
-
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      init();
-    });
-  </script>
+  <script src="/static/common/js/toast.js"></script>
+  <script src="/static/common/js/admin-auth.js"></script>
+  <script src="/static/common/js/header.js"></script>
+  <script src="/static/common/js/footer.js"></script>
+  <script src="/static/admin/js/logs.js"></script>
 </body>
 
 </html>
-

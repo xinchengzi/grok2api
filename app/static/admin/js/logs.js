@@ -35,7 +35,7 @@ function buildAuthHeaders() {
 function fmtTime(ts) {
   if (!ts) return '';
   try {
-    const d = new Date(ts);
+    const d = new Date(Number(ts));
     if (!Number.isNaN(d.getTime())) return d.toLocaleString();
   } catch (_) {}
   return String(ts);
@@ -97,14 +97,18 @@ async function refreshLogs() {
 
     tbody.innerHTML = logs.map(item => {
       const ok = !!item.success;
+      const respMs = (item.response_time !== undefined && item.response_time !== null)
+        ? (Number(item.response_time) * 1000)
+        : (item.response_time_ms ?? item.duration_ms ?? item.response_time);
       return `
         <tr class="border-t border-[var(--border)]">
-          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtTime(item.ts || item.time || item.created_at))}</td>
+          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtTime(item.timestamp))}</td>
           <td class="px-4 py-3 whitespace-nowrap">${safeText(item.model || '')}</td>
           <td class="px-4 py-3 whitespace-nowrap">${badge(ok)} ${safeText(item.status_code || '')}</td>
-          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtMs(item.response_time_ms ?? item.duration_ms ?? item.response_time))}</td>
-          <td class="px-4 py-3 whitespace-nowrap">${safeText(item.sso || item.token_masked || '')}</td>
-          <td class="px-4 py-3">${safeText(item.error || item.message || '')}</td>
+          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtMs(respMs))}</td>
+          <td class="px-4 py-3 whitespace-nowrap">${safeText(item.sso || '')}</td>
+          <td class="px-4 py-3 whitespace-nowrap">${safeText(item.proxy_used || '')}</td>
+          <td class="px-4 py-3">${safeText(item.error_message || '')}</td>
         </tr>
       `;
     }).join('');
