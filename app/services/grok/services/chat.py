@@ -117,8 +117,8 @@ class MessageExtractor:
     _NO_REPEAT_HINT = "[注意：请根据以上对话历史回答当前问题，不要重复历史回复中的内容。]"
 
     @staticmethod
-    def extract(messages: List[Dict[str, Any]]) -> tuple[str, List[str], List[str]]:
-        """从 OpenAI 消息格式提取内容，返回 (text, file_attachments, image_attachments)"""
+    def extract(messages: List[Dict[str, Any]]) -> tuple[str, List[str], List[str], List[str]]:
+        """从 OpenAI 消息格式提取内容，返回 (text, file_attachments, image_attachments, user_image_urls)"""
         texts = []
         file_attachments: List[str] = []
         image_attachments: List[str] = []
@@ -157,6 +157,8 @@ class MessageExtractor:
                         url = image_data.get("url", "")
                         if url:
                             image_attachments.append(url)
+                            if role == "user":
+                                user_image_urls.append(url)
                             image_att_index += 1
                             # 在文本中按出现顺序插入占位符，保证图片-轮次-问题绑定
                             parts.append(f"[image att:{image_att_index}]")
@@ -220,7 +222,23 @@ class MessageExtractor:
             message = re.sub(r"\[image att:\d+\]", "", message)
             message = re.sub(r"\n{3,}", "\n\n", message).strip()
 
-        return message, file_attachments, image_attachments
+        return message, file_attachments, image_attachments, user_image_urls
+
+    @staticmethod
+    def select_imagine_base_image(
+        *,
+        image_attachments: List[str],
+        user_image_urls: List[str],
+    ) -> List[str]:
+        """旧版 imagine 连续编辑：只绑定一张"基图"。
+
+        规则：用户最后上传图优先，否则取历史最后一张图；如果没有图则返回空。
+        """
+        if user_image_urls:
+            base = user_image_urls[-1]
+        else:
+            base = image_attachments[-1] if image_attachments else None
+        return [base] if base else []
 
 
 class GrokChatService:
@@ -291,7 +309,7 @@ class GrokChatService:
         grok_model = model_info.grok_model
         mode = model_info.model_mode
         # 提取消息和附件
-        message, file_attachments, image_attachments = MessageExtractor.extract(messages)
+        message, file_attachments, image_attachments, user_image_urls = MessageExtractor.extract(messages)
         logger.debug(
             "Extracted message length=%s, files=%s, images=%s",
             len(message),
@@ -299,9 +317,27 @@ class GrokChatService:
             len(image_attachments),
         )
 
+        # imagine 连续编辑规则：只绑定一张基图
+        if str(model).startswith("grok-imagine"):
+            image_attachments = MessageExtractor.select_imagine_base_image(
+                image_attachments=image_attachments, user_image_urls=user_image_urls
+            )
+            # imagine：只发送最后一条 user 文本指令（不带历史格式化）
+            for msg in reversed(messages or []):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        parts = []
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                parts.append(item.get("text", ""))
+                        message = "".join(parts).strip()
+                    elif isinstance(content, str):
+                        message = content.strip()
+                    break
+
         # 上传附件
         file_ids: List[str] = []
-        image_ids: List[str] = []
         if file_attachments or image_attachments:
             upload_service = UploadService()
             try:
@@ -317,7 +353,7 @@ class GrokChatService:
             finally:
                 await upload_service.close()
 
-        all_attachments = file_ids + image_ids
+        all_attachments = file_ids
         stream = stream if stream is not None else get_config("app.stream")
 
         model_config_override = {
