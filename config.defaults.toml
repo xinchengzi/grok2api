@@ -27,6 +27,7 @@ dynamic_statsig = true
 # 过滤的特殊标签列表
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
 
+<<<<<<< HEAD
 
 # ==================== 代理配置 ====================
 [proxy]
@@ -58,6 +59,12 @@ retry_backoff_factor = 2.0
 retry_backoff_max = 20.0
 # 总重试预算时间（秒）
 retry_budget = 60.0
+
+# 调试请求日志（默认关闭）
+debug_request_log = false
+debug_request_log_dir = "/app/logs/requests"
+debug_request_log_max_total_bytes = 104857600
+debug_request_log_base64_keep = 512
 
 
 # ==================== Token 池管理 ====================

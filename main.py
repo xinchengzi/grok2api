@@ -41,6 +41,7 @@ from app.api.v1.admin_api import router as admin_router
 from app.api.v1.public_api import router as public_router
 from app.api.pages import router as pages_router
 from fastapi.staticfiles import StaticFiles
+from app.services.call_log import call_log_service  # noqa: E402
 
 # 初始化日志
 setup_logging(
@@ -73,6 +74,12 @@ async def lifespan(app: FastAPI):
         interval = min(basic_interval, super_interval)
         scheduler = get_scheduler(interval)
         scheduler.start()
+
+    # 4. 启动调用日志服务
+    try:
+        await call_log_service.start()
+    except Exception as e:
+        logger.warning(f"CallLog service start failed: {e}")
 
     logger.info("Application startup complete.")
     yield

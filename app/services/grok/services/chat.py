@@ -27,6 +27,8 @@ from app.services.reverse.app_chat import AppChatReverse
 from app.services.reverse.utils.session import ResettableSession
 from app.services.grok.utils.stream import wrap_stream_with_usage
 from app.services.token import get_token_manager, EffortType
+from app.services.call_log import call_log_service
+from app.services.request_debug_log import request_debug_log_service
 
 
 _CHAT_SEMAPHORE = None
@@ -124,6 +126,8 @@ class MessageExtractor:
 
         # 用于将图片附件绑定到对话轮次：在文本中插入占位符 [image att:N]
         image_att_index = 0
+        # 用于 decide user uploaded image vs history image
+        user_image_urls: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "") or "user"
@@ -323,6 +327,7 @@ class GrokChatService:
         if reasoning_effort is not None:
             model_config_override["reasoningEffort"] = reasoning_effort
 
+        payload_debug = None
         response = await self.chat(
             token,
             message,
@@ -338,6 +343,40 @@ class GrokChatService:
 
 class ChatService:
     """Chat 业务服务"""
+
+    @staticmethod
+    async def _wrap_stream(stream, token_mgr, token: str, model: str):
+        """包装流式响应，在完成时记录使用"""
+        success = False
+        try:
+            async for chunk in stream:
+                yield chunk
+            success = True
+        finally:
+            if success:
+                try:
+                    model_info = ModelService.get(model)
+                    effort = (
+                        EffortType.HIGH
+                        if (model_info and model_info.cost.value == "high")
+                        else EffortType.LOW
+                    )
+                    await token_mgr.consume(token, effort)
+                    try:
+                        call_log_service.queue_call(
+                            sso=str(token)[:20],
+                            model=model,
+                            success=True,
+                            status_code=200,
+                            response_time=0.0,
+                        )
+                    except Exception:
+                        pass
+                    logger.debug(
+                        f"Stream completed, recorded usage for token {token[:10]}... (effort={effort.value})"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record stream usage: {e}")
 
     @staticmethod
     async def completions(
