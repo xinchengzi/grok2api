@@ -536,6 +536,9 @@ class StreamProcessor(proc_base.BaseProcessor):
         self._tool_usage_opened = False
         self._tool_usage_buffer = ""
 
+        # 连续编辑体验：imagine 只输出一张图
+        self._limit_imagine_images = str(model).startswith("grok-imagine")
+
         self.show_think = bool(show_think)
 
     def _filter_tool_card(self, token: str) -> str:
@@ -690,7 +693,10 @@ class StreamProcessor(proc_base.BaseProcessor):
                         yield self._sse("\n</think>\n")
                         self.think_opened = False
                     self.image_think_active = False
-                    for url in proc_base._collect_images(mr):
+                    urls = list(proc_base._collect_images(mr))
+                    if self._limit_imagine_images and len(urls) > 1:
+                        urls = urls[:1]
+                    for url in urls:
                         parts = url.split("/")
                         img_id = parts[-2] if len(parts) >= 2 else "image"
                         dl_service = self._get_dl()
@@ -791,6 +797,8 @@ class CollectProcessor(proc_base.BaseProcessor):
     def __init__(self, model: str, token: str = ""):
         super().__init__(model, token)
         self.filter_tags = get_config("app.filter_tags")
+        # 连续编辑体验：imagine 只输出一张图
+        self._limit_imagine_images = str(model).startswith("grok-imagine")
 
     def _filter_content(self, content: str) -> str:
         """Filter special tags in content."""
@@ -895,6 +903,9 @@ class CollectProcessor(proc_base.BaseProcessor):
 
                     if urls := proc_base._collect_images(mr):
                         content += "\n"
+                        urls = list(urls or [])
+                        if self._limit_imagine_images and len(urls) > 1:
+                            urls = urls[:1]
                         for url in urls:
                             parts = url.split("/")
                             img_id = parts[-2] if len(parts) >= 2 else "image"
