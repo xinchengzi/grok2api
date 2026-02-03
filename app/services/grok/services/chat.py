@@ -2,6 +2,7 @@
 Grok Chat 服务
 """
 
+import re
 import orjson
 from typing import Dict, List, Any
 from dataclasses import dataclass
@@ -41,14 +42,43 @@ class ChatRequest:
 class MessageExtractor:
     """消息内容提取器"""
 
+    # 需要上传的类型
+    UPLOAD_TYPES = {"image_url", "input_audio", "file"}
+    # 视频模式不支持的类型
+    VIDEO_UNSUPPORTED = {"input_audio", "file"}
+
+    # OpenWebUI 常注入的附件占位块（会干扰模型/导致回显）
+    _ATTACHED_FILES_BLOCK_RE = re.compile(r"(?s)<attached_files>.*?</attached_files>\s*")
+    _ATTACHED_FILE_TAG_RE = re.compile(r"<file\s+[^>]*?/>")
+
+    # 防复述提示语（旧版行为）
+    _NO_REPEAT_HINT = "[注意：请根据以上对话历史回答当前问题，不要重复历史回复中的内容。]"
+
     @staticmethod
     def extract(
         messages: List[Dict[str, Any]], is_video: bool = False
     ) -> tuple[str, List[tuple[str, str]]]:
-        """从 OpenAI 消息格式提取内容，返回 (text, attachments)"""
-        texts = []
-        attachments = []
-        extracted = []
+        """
+        从 OpenAI 消息格式提取内容
+
+        Args:
+            messages: OpenAI 格式消息列表
+            is_video: 是否为视频模型
+
+        Returns:
+            (text, attachments): 拼接后的文本和需要上传的附件列表
+
+        Raises:
+            ValueError: 视频模型遇到不支持的内容类型
+        """
+        texts: List[str] = []
+        attachments = []  # 需要上传的附件 (URL 或 base64)
+
+        # 先抽取每条消息的文本，保留角色信息用于合并
+        extracted: List[Dict[str, str]] = []
+
+        # 用于将图片附件绑定到对话轮次：在文本中插入占位符 [image att:N]
+        image_att_index = 0
 
         for msg in messages:
             role = msg.get("role", "")
@@ -56,14 +86,21 @@ class MessageExtractor:
             parts = []
 
             if isinstance(content, str):
-                if content.strip():
-                    parts.append(content)
+                text = content
+                text = MessageExtractor._ATTACHED_FILES_BLOCK_RE.sub("", text)
+                text = MessageExtractor._ATTACHED_FILE_TAG_RE.sub("", text)
+                if text.strip():
+                    parts.append(text)
+
             elif isinstance(content, list):
                 for item in content:
                     item_type = item.get("type", "")
 
                     if item_type == "text":
-                        if text := item.get("text", "").strip():
+                        text = item.get("text", "")
+                        text = MessageExtractor._ATTACHED_FILES_BLOCK_RE.sub("", text)
+                        text = MessageExtractor._ATTACHED_FILE_TAG_RE.sub("", text)
+                        if text.strip():
                             parts.append(text)
 
                     elif item_type == "image_url":
@@ -75,6 +112,9 @@ class MessageExtractor:
                         )
                         if url:
                             attachments.append(("image", url))
+                            image_att_index += 1
+                            # 旧版：在文本中按出现顺序插入占位符，保证图片-轮次-问题绑定
+                            parts.append(f"[image att:{image_att_index}]")
 
                     elif item_type == "input_audio":
                         if is_video:
@@ -111,10 +151,31 @@ class MessageExtractor:
             None,
         )
 
+        is_multi_turn = len(extracted) > 1
+
         for i, item in enumerate(extracted):
             role = item["role"] or "user"
             text = item["text"]
-            texts.append(text if i == last_user_index else f"{role}: {text}")
+
+            if not is_multi_turn:
+                texts.append(text)
+                continue
+
+            is_last_user = i == last_user_index
+            if role == "system":
+                texts.append(f"[系统指令]: {text}")
+            elif role == "user":
+                if is_last_user:
+                    texts.append(f"[当前问题]: {text}")
+                else:
+                    texts.append(f"[历史用户消息]: {text}")
+            elif role == "assistant":
+                texts.append(f"[历史AI回复]: {text}")
+            else:
+                texts.append(f"[{role}]: {text}")
+
+        if is_multi_turn:
+            texts.append(MessageExtractor._NO_REPEAT_HINT)
 
         return "\n\n".join(texts), attachments
 
