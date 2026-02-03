@@ -79,7 +79,8 @@ class NSFWService:
                     try:
                         async with _get_nsfw_semaphore():
                             grpc_status = await NsfwMgmtReverse.request(session, token)
-                        success = grpc_status.code in (-1, 0)
+                        # 仅 grpc-status=0 视为成功，避免"HTTP 200 但实际未生效"误判。
+                        success = grpc_status.code == 0
                     except UpstreamException as e:
                         status = await _record_fail(e, "nsfw_mgmt_auth_failed")
                         return {
