@@ -37,6 +37,9 @@ class StreamProcessor(BaseProcessor):
         self._tag_buffer: str = ""
         self._in_filter_tag: bool = False
 
+        # 连续编辑体验：imagine 只输出一张图
+        self._limit_imagine_images = str(model).startswith("grok-imagine")
+
         if think is None:
             self.show_think = get_config("chat.thinking")
         else:
@@ -170,7 +173,11 @@ class StreamProcessor(BaseProcessor):
                         self.think_opened = False
 
                     # 处理生成的图片
-                    for url in _collect_image_urls(mr):
+                    urls = _collect_image_urls(mr)
+                    if self._limit_imagine_images and len(urls) > 1:
+                        urls = urls[:1]
+
+                    for url in urls:
                         parts = url.split("/")
                         img_id = parts[-2] if len(parts) >= 2 else "image"
 
@@ -310,6 +317,7 @@ class CollectProcessor(BaseProcessor):
         self.image_format = get_config("app.image_format")
         self.filter_tags = get_config("chat.filter_tags")
         self._thinking_capture_enabled = str(model).endswith("-thinking")
+        self._limit_imagine_images = str(model).startswith("grok-imagine")
 
     def _filter_content(self, content: str) -> str:
         """过滤内容中的特殊标签"""
@@ -365,6 +373,10 @@ class CollectProcessor(BaseProcessor):
 
                     if urls := _collect_image_urls(mr):
                         content += "\n"
+                        urls = list(urls or [])
+                        if self._limit_imagine_images and len(urls) > 1:
+                            urls = urls[:1]
+
                         for url in urls:
                             parts = url.split("/")
                             img_id = parts[-2] if len(parts) >= 2 else "image"
