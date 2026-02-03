@@ -1,0 +1,92 @@
+name: Sync Upstream and Build
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout local branch
+        uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync upstream and rebase
+        id: sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git remote add upstream https://github.com/chenyme/grok2api.git
+          git fetch upstream --tags
+          
+          # 检查上游是否有更新
+          CURRENT_MAIN=$(git rev-parse origin/main)
+          UPSTREAM_MAIN=$(git rev-parse upstream/main)
+          
+          # 如果是定时任务且没有更新，则跳过；手动触发则强制运行
+          if [ "$CURRENT_MAIN" = "$UPSTREAM_MAIN" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "上游没有更新，跳过构建"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "changed=true" >> $GITHUB_OUTPUT
+          
+          # 1. 同步 main 分支 (强制覆盖为上游最新状态)
+          git checkout origin/main
+          git switch -C main
+          git reset --hard upstream/main
+          git push origin main --force
+          
+          # 获取版本号 (用于 Docker tag)
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          # 获取当前日期 (MMdd)
+          DATE_SUFFIX=$(date +'%m%d')
+          # 组合版本号: v1.2.3 -> 1.2.3-0124
+          FULL_VERSION="${VERSION#v}-${DATE_SUFFIX}"
+          
+          echo "version=${FULL_VERSION}" >> $GITHUB_OUTPUT
+          
+          # 2. Rebase custom 分支
+          git checkout origin/custom
+          git switch -C custom
+          
+          echo "正在将 custom 分支 rebase 到最新的 main..."
+          if git rebase main; then
+            git push origin custom --force
+            echo "rebase_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Rebase 冲突！自动合并失败，请本地手动解决冲突。"
+            echo "rebase_success=false" >> $GITHUB_OUTPUT
+            git rebase --abort
+            exit 1
+          fi
+
+      - name: Login to GHCR
+        if: steps.sync.outputs.changed == 'true' && steps.sync.outputs.rebase_success == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: steps.sync.outputs.changed == 'true' && steps.sync.outputs.rebase_success == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/xinchengzi/grok2api:${{ steps.sync.outputs.version }}
+            ghcr.io/xinchengzi/grok2api:latest
+          build-args: |
+            VERSION=${{ steps.sync.outputs.version }}
