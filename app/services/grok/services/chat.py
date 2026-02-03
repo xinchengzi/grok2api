@@ -190,6 +190,9 @@ class MessageExtractor:
         if not is_multi_turn and image_att_index:
             message = re.sub(r"\[image att:\d+\]", "", message)
             message = re.sub(r"\n{3,}", "\n\n", message).strip()
+        # 将 user_image_urls 附加在 attachments 的尾部（不破坏原签名），供上层取用。
+        # 约定：("__meta_user_images__", list[str])
+        attachments.append(("__meta_user_images__", user_image_urls))
         return message, attachments
 
     @staticmethod
@@ -439,7 +442,38 @@ class GrokChatService:
         except ValueError as e:
             raise ValidationException(str(e))
 
-        # 上传附件
+        user_image_urls: List[str] = []
+        cleaned_attachments: List[tuple[str, str]] = []
+        for t, v in attachments:
+            if t == "__meta_user_images__":
+                try:
+                    user_image_urls = list(v) if isinstance(v, list) else []
+                except Exception:
+                    user_image_urls = []
+            else:
+                cleaned_attachments.append((t, v))
+        attachments = cleaned_attachments
+
+        # imagine 连续编辑规则：只绑定一张基图
+        if str(request.model).startswith("grok-imagine"):
+            attachments = MessageExtractor.select_imagine_base_image(
+                attachments=attachments, user_image_urls=user_image_urls
+            )
+            # imagine：只发送最后一条 user 文本指令（不带历史格式化）
+            for msg in reversed(request.messages or []):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        parts = []
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                parts.append(item.get("text", ""))
+                        message = "".join(parts).strip()
+                    elif isinstance(content, str):
+                        message = content.strip()
+                    break
+
+        # 处理附件上传
         file_ids = []
         if attachments:
             upload_service = UploadService()
