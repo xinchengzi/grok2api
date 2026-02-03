@@ -45,6 +45,7 @@ class StreamProcessor(BaseProcessor):
         # 仅对 *-thinking 模型启用思考分离逻辑，避免误伤普通回答内容
         self._thinking_capture_enabled = str(model).endswith("-thinking")
         self._in_thinking = False
+        self._answer_started = False
 
     def _filter_token(self, token: str) -> str:
         """过滤 token 中的特殊标签（如 <grok:render>...</grok:render>），支持跨 token 的标签过滤"""
@@ -134,6 +135,10 @@ class StreamProcessor(BaseProcessor):
 
                 resp = data.get("result", {}).get("response", {})
 
+                current_is_thinking = None
+                if isinstance(resp, dict) and isinstance(resp.get("isThinking"), bool):
+                    current_is_thinking = resp.get("isThinking")
+
                 if (llm := resp.get("llmInfo")) and not self.fingerprint:
                     self.fingerprint = llm.get("modelHash", "")
                 if rid := resp.get("responseId"):
@@ -208,41 +213,52 @@ class StreamProcessor(BaseProcessor):
                         # thinking 分离逻辑
                         if self._thinking_capture_enabled:
                             stripped = filtered.lstrip()
-                            looks_like_thinking = (
-                                stripped.startswith("Thinking")
-                                or "处理查询" in stripped
-                                or "思考" in stripped
-                                or "分析" in stripped
-                            )
-                            looks_like_final_marker = (
-                                "Final" in stripped
-                                or "答案" in stripped
-                                or "结论" in stripped
-                            )
 
-                            # 非思考 token 一旦出现，认为已进入最终答复
-                            if self._in_thinking and (not looks_like_thinking) and stripped.strip():
-                                self._in_thinking = False
-                                if self.show_think:
-                                    yield self._sse("\n</think>\n")
+                            def open_think():
+                                if not self._in_thinking:
+                                    self._in_thinking = True
+                                    if self.show_think:
+                                        return ["<think>\n"]
+                                return []
 
-                            if not self._in_thinking and looks_like_thinking and not looks_like_final_marker:
-                                self._in_thinking = True
-                                if self.show_think:
-                                    yield self._sse("<think>\n")
-
-                            if self._in_thinking:
-                                if looks_like_final_marker:
+                            def close_think():
+                                if self._in_thinking:
                                     self._in_thinking = False
                                     if self.show_think:
-                                        yield self._sse("\n</think>\n")
-                                    continue
+                                        return ["\n</think>\n"]
+                                return []
 
+                            # 优先使用上游标志位：isThinking
+                            if current_is_thinking is True:
+                                for c in open_think():
+                                    yield self._sse(c)
                                 if self.show_think:
                                     yield self._sse(filtered)
                                 continue
+                            if current_is_thinking is False and self._in_thinking:
+                                for c in close_think():
+                                    yield self._sse(c)
+
+                            # fallback：仅在尚未输出答复且没有 isThinking 标志时启发式识别
+                            if current_is_thinking is None:
+                                looks_like_thinking = (
+                                    stripped.startswith("Thinking")
+                                    or "处理查询" in stripped
+                                    or (not self._answer_started and stripped.startswith("- "))
+                                )
+                                if looks_like_thinking:
+                                    for c in open_think():
+                                        yield self._sse(c)
+                                    if self.show_think:
+                                        yield self._sse(filtered)
+                                    continue
+
+                                if self._in_thinking and stripped.strip():
+                                    for c in close_think():
+                                        yield self._sse(c)
 
                         yield self._sse(filtered)
+                        self._answer_started = True
 
             if self.think_opened:
                 yield self._sse("</think>\n")
