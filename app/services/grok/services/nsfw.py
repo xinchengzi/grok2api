@@ -154,9 +154,13 @@ class NSFWService:
                         error=f"HTTP {response.status_code}",
                     )
 
+                content_type = response.headers.get("content-type", "")
+
                 # 解析 gRPC-Web 响应
                 _, trailers = parse_grpc_web_response(
-                    response.content, content_type=response.headers.get("content-type")
+                    response.content,
+                    content_type=content_type,
+                    headers=getattr(response, "headers", None),
                 )
 
                 grpc_status = get_grpc_status(trailers)
@@ -165,8 +169,8 @@ class NSFWService:
                     f"msg={grpc_status.message} trailers={trailers}"
                 )
 
-                # HTTP 200 且无 grpc-status（空响应）或 grpc-status=0 都算成功
-                success = grpc_status.code == -1 or grpc_status.ok
+                # 仅 grpc-status=0 视为成功，避免“HTTP 200 但实际未生效”误判。
+                success = grpc_status.ok
 
                 return NSFWResult(
                     success=success,
