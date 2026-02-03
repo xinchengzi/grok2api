@@ -44,6 +44,9 @@ env/
 logs/
 *.log
 
+# Allow admin UI assets under app/static/logs
+!app/static/logs/
+
 # Data
 data/
 app/data/

@@ -30,3 +30,8 @@ async def admin_cache():
 @router.get("/admin/token", include_in_schema=False)
 async def admin_token():
     return FileResponse(STATIC_DIR / "admin/pages/token.html")
+
+
+@router.get("/admin/logs", include_in_schema=False)
+async def admin_logs():
+    return FileResponse(STATIC_DIR / "admin/pages/logs.html")
