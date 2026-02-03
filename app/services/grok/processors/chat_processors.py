@@ -42,6 +42,10 @@ class StreamProcessor(BaseProcessor):
         else:
             self.show_think = think
 
+        # 仅对 *-thinking 模型启用思考分离逻辑，避免误伤普通回答内容
+        self._thinking_capture_enabled = str(model).endswith("-thinking")
+        self._in_thinking = False
+
     def _filter_token(self, token: str) -> str:
         """过滤 token 中的特殊标签（如 <grok:render>...</grok:render>），支持跨 token 的标签过滤"""
         if not self.filter_tags:
@@ -198,11 +202,46 @@ class StreamProcessor(BaseProcessor):
                 if (token := resp.get("token")) is not None:
                     if token:
                         filtered = self._filter_token(token)
-                        if filtered:
-                            yield self._sse(filtered)
+                        if not filtered:
+                            continue
+
+                        # thinking 分离逻辑
+                        if self._thinking_capture_enabled:
+                            stripped = filtered.lstrip()
+                            looks_like_thinking = (
+                                stripped.startswith("Thinking")
+                                or "处理查询" in stripped
+                                or "思考" in stripped
+                                or "分析" in stripped
+                            )
+                            looks_like_final_marker = (
+                                "Final" in stripped
+                                or "答案" in stripped
+                                or "结论" in stripped
+                            )
+
+                            if not self._in_thinking and looks_like_thinking and not looks_like_final_marker:
+                                self._in_thinking = True
+                                if self.show_think:
+                                    yield self._sse("<think>\n")
+
+                            if self._in_thinking:
+                                if looks_like_final_marker:
+                                    self._in_thinking = False
+                                    if self.show_think:
+                                        yield self._sse("\n</think>\n")
+                                    continue
+
+                                if self.show_think:
+                                    yield self._sse(filtered)
+                                continue
+
+                        yield self._sse(filtered)
 
             if self.think_opened:
                 yield self._sse("</think>\n")
+            if self._in_thinking and self.show_think:
+                yield self._sse("\n</think>\n")
             yield self._sse(finish="stop")
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
@@ -248,6 +287,7 @@ class CollectProcessor(BaseProcessor):
         super().__init__(model, token)
         self.image_format = get_config("app.image_format")
         self.filter_tags = get_config("chat.filter_tags")
+        self._thinking_capture_enabled = str(model).endswith("-thinking")
 
     def _filter_content(self, content: str) -> str:
         """过滤内容中的特殊标签"""
@@ -260,6 +300,17 @@ class CollectProcessor(BaseProcessor):
             result = re.sub(pattern, "", result, flags=re.DOTALL)
 
         return result
+
+    @staticmethod
+    def _strip_leading_thinking(text: str) -> str:
+        if not text:
+            return text
+        if text.lstrip().startswith("Thinking"):
+            parts = text.split("\n\n", 1)
+            if len(parts) == 2:
+                return parts[1].lstrip("\n")
+            return ""
+        return text
 
     async def process(self, response: AsyncIterable[bytes]) -> dict[str, Any]:
         """处理并收集完整响应"""
@@ -286,6 +337,9 @@ class CollectProcessor(BaseProcessor):
                 if mr := resp.get("modelResponse"):
                     response_id = mr.get("responseId", "")
                     content = mr.get("message", "")
+
+                    if self._thinking_capture_enabled:
+                        content = self._strip_leading_thinking(content)
 
                     if urls := _collect_image_urls(mr):
                         content += "\n"
