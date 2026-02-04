@@ -22,7 +22,7 @@ async function init() {
     refreshLogs();
   });
 
-  refreshLogs();
+  await refreshLogs();
 }
 
 function buildAuthHeaders() {
@@ -41,11 +41,11 @@ function fmtTime(ts) {
   return String(ts);
 }
 
-function fmtMs(ms) {
-  if (ms === null || ms === undefined) return '';
-  const n = Number(ms);
-  if (Number.isNaN(n)) return String(ms);
-  return `${n.toFixed(0)}ms`;
+function fmtSeconds(sec) {
+  if (sec === null || sec === undefined) return '';
+  const n = Number(sec);
+  if (Number.isNaN(n)) return String(sec);
+  return `${n.toFixed(1)}s`;
 }
 
 function badge(ok) {
@@ -97,17 +97,16 @@ async function refreshLogs() {
 
     tbody.innerHTML = logs.map(item => {
       const ok = !!item.success;
-      const respMs = (item.response_time !== undefined && item.response_time !== null)
-        ? (Number(item.response_time) * 1000)
-        : (item.response_time_ms ?? item.duration_ms ?? item.response_time);
+      const respSec = (item.response_time !== undefined && item.response_time !== null)
+        ? Number(item.response_time)
+        : ((item.response_time_ms ?? item.duration_ms) ? Number(item.response_time_ms ?? item.duration_ms) / 1000 : null);
       return `
         <tr class="border-t border-[var(--border)]">
           <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtTime(item.timestamp))}</td>
           <td class="px-4 py-3 whitespace-nowrap">${safeText(item.model || '')}</td>
           <td class="px-4 py-3 whitespace-nowrap">${badge(ok)} ${safeText(item.status_code || '')}</td>
-          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtMs(respMs))}</td>
+          <td class="px-4 py-3 whitespace-nowrap">${safeText(fmtSeconds(respSec))}</td>
           <td class="px-4 py-3 whitespace-nowrap">${safeText(item.sso || '')}</td>
-          <td class="px-4 py-3 whitespace-nowrap">${safeText(item.proxy_used || '')}</td>
           <td class="px-4 py-3">${safeText(item.error_message || '')}</td>
         </tr>
       `;
@@ -160,3 +159,6 @@ async function clearLogs() {
     showToast(`清空失败：${e.message || e}`, 'error');
   }
 }
+
+
+window.onload = init;
