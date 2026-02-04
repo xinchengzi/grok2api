@@ -128,7 +128,7 @@ function clearStoredAppKey() {
 
 async function requestApiKey(appKey) {
   const headers = appKey ? { 'Authorization': `Bearer ${appKey}` } : {};
-  const res = await fetch('/api/v1/admin/login', { method: 'POST', headers });
+  const res = await fetch('./api/v1/admin/login', { method: 'POST', headers });
   if (!res.ok) {
     throw new Error('Unauthorized');
   }
@@ -141,14 +141,14 @@ async function requestApiKey(appKey) {
 async function ensureApiKey() {
   const appKey = await getStoredAppKey();
   if (!appKey) {
-    window.location.href = '/admin';
+    window.location.href = './admin';
     return null;
   }
   try {
     return await requestApiKey(appKey);
   } catch (e) {
     clearStoredAppKey();
-    window.location.href = '/admin';
+    window.location.href = './admin';
     return null;
   }
 }
@@ -159,14 +159,14 @@ function buildAuthHeaders(apiKey) {
 
 function logout() {
   clearStoredAppKey();
-  window.location.href = '/admin';
+  window.location.href = './admin';
 }
 
 async function fetchStorageType() {
   const apiKey = await ensureApiKey();
   if (apiKey === null) return null;
   try {
-    const res = await fetch('/api/v1/admin/storage', {
+    const res = await fetch('./api/v1/admin/storage', {
       headers: buildAuthHeaders(apiKey)
     });
     if (!res.ok) return null;
