@@ -175,6 +175,9 @@ class CallLogService:
             logs = [x for x in logs if x.model == model]
         if success is not None:
             logs = [x for x in logs if x.success is success]
+
+        # 默认按时间倒序（最新在前），符合管理页直觉
+        logs = sorted(logs, key=lambda x: x.timestamp, reverse=True)
         total = len(logs)
         start = max(0, (page - 1) * page_size)
         end = start + page_size
@@ -195,4 +198,3 @@ class CallLogService:
 
 
 call_log_service = CallLogService()
-
