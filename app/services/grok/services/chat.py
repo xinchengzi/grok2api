@@ -5,6 +5,7 @@ Grok Chat 服务
 import asyncio
 import re
 import uuid
+import time
 import base64
 import mimetypes
 from pathlib import Path
@@ -470,8 +471,17 @@ class ChatService:
     """Chat 业务服务"""
 
     @staticmethod
-    async def _wrap_stream(stream, token_mgr, token: str, model: str):
-        """包装流式响应，在完成时记录使用"""
+    async def _wrap_stream(stream: AsyncGenerator, token_mgr, token: str, model: str):
+        """
+        包装流式响应，在完成时记录使用
+
+        Args:
+            stream: 原始 AsyncGenerator
+            token_mgr: TokenManager 实例
+            token: Token 字符串
+            model: 模型名称
+        """
+        start = time.time()
         success = False
         try:
             async for chunk in stream:
@@ -493,7 +503,7 @@ class ChatService:
                             model=model,
                             success=True,
                             status_code=200,
-                            response_time=0.0,
+                            response_time=time.time() - start,
                         )
                     except Exception:
                         pass
@@ -566,6 +576,7 @@ class ChatService:
                     )
 
                 # 非流式
+                start = time.time()
                 logger.debug(f"Processing non-stream response: model={model}")
                 result = await CollectProcessor(model_name, token).process(response)
                 try:
@@ -576,9 +587,21 @@ class ChatService:
                         else EffortType.LOW
                     )
                     await token_mgr.consume(token, effort)
-                    logger.info(f"Chat completed: model={model}, effort={effort.value}")
+                    try:
+                        call_log_service.queue_call(
+                            sso=str(token)[:20],
+                            model=model,
+                            success=True,
+                            status_code=200,
+                            response_time=time.time() - start,
+                        )
+                    except Exception:
+                        pass
+                    logger.debug(
+                        f"Collect completed, recorded usage for token {token[:10]}... (effort={effort.value})"
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to record usage: {e}")
+                    logger.warning(f"Failed to record collect usage: {e}")
                 return result
 
             except UpstreamException as e:

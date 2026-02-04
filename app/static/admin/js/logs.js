@@ -11,9 +11,6 @@ async function init() {
   apiKey = await ensureApiKey();
   if (apiKey === null) return;
 
-  await loadHeader();
-  await loadFooter();
-
   const pageSizeEl = document.getElementById('filter-page-size');
   pageSizeEl.value = String(state.pageSize);
   pageSizeEl.addEventListener('change', () => {
@@ -30,6 +27,17 @@ function buildAuthHeaders() {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${apiKey}`
   };
+}
+
+function apiBasePrefix() {
+  // When served behind a path-based reverse proxy (e.g. /grok2api/*),
+  // static assets are also under that prefix, but our fetch() paths are absolute.
+  // Derive the prefix from current location.
+  const p = window.location.pathname || '';
+  const marker = '/admin/';
+  const i = p.indexOf(marker);
+  if (i > 0) return p.slice(0, i);
+  return '';
 }
 
 function fmtTime(ts) {
@@ -73,7 +81,8 @@ async function refreshLogs() {
   if (state.success) params.set('success', state.success);
 
   try {
-    const res = await fetch(`/api/v1/admin/logs?${params.toString()}`, {
+    const base = apiBasePrefix();
+    const res = await fetch(`${base}/api/v1/admin/logs?${params.toString()}`, {
       headers: buildAuthHeaders()
     });
     if (res.status === 401) {
@@ -141,7 +150,8 @@ async function clearLogs() {
   if (!confirm('确认清空所有调用日志？')) return;
 
   try {
-    const res = await fetch('/api/v1/admin/logs', {
+    const base = apiBasePrefix();
+    const res = await fetch(`${base}/api/v1/admin/logs`, {
       method: 'DELETE',
       headers: buildAuthHeaders()
     });
