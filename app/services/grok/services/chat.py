@@ -3,6 +3,7 @@ Grok Chat 服务
 """
 
 import re
+import time
 import orjson
 import base64
 import mimetypes
@@ -619,8 +620,17 @@ class ChatService:
     """Chat 业务服务"""
 
     @staticmethod
-    async def _wrap_stream(stream, token_mgr, token: str, model: str):
-        """包装流式响应，在完成时记录使用"""
+    async def _wrap_stream(stream: AsyncGenerator, token_mgr, token: str, model: str):
+        """
+        包装流式响应，在完成时记录使用
+
+        Args:
+            stream: 原始 AsyncGenerator
+            token_mgr: TokenManager 实例
+            token: Token 字符串
+            model: 模型名称
+        """
+        start = time.time()
         success = False
         try:
             async for chunk in stream:
@@ -642,7 +652,7 @@ class ChatService:
                             model=model,
                             success=True,
                             status_code=200,
-                            response_time=0.0,
+                            response_time=time.time() - start,
                         )
                     except Exception:
                         pass
@@ -704,32 +714,35 @@ class ChatService:
             return wrap_stream_with_usage(
                 processor.process(response), token_mgr, token, model
             )
-
-        # 非流式
-        logger.debug(f"Processing non-stream response: model={model}")
-        result = await CollectProcessor(model_name, token).process(response)
-        try:
-            model_info = ModelService.get(model)
-            effort = (
-                EffortType.HIGH
-                if (model_info and model_info.cost.value == "high")
-                else EffortType.LOW
-            )
-            await token_mgr.consume(token, effort)
+        else:
+            # 非流式
+            start = time.time()
+            logger.debug(f"Processing non-stream response: model={model}")
+            result = await CollectProcessor(model_name, token).process(response)
             try:
-                call_log_service.queue_call(
-                    sso=str(token)[:20],
-                    model=model,
-                    success=True,
-                    status_code=200,
-                    response_time=0.0,
+                model_info = ModelService.get(model)
+                effort = (
+                    EffortType.HIGH
+                    if (model_info and model_info.cost.value == "high")
+                    else EffortType.LOW
                 )
-            except Exception:
-                pass
-            logger.info(f"Chat completed: model={model}, effort={effort.value}")
-        except Exception as e:
-            logger.warning(f"Failed to record usage: {e}")
-        return result
+                await token_mgr.consume(token, effort)
+                try:
+                    call_log_service.queue_call(
+                        sso=str(token)[:20],
+                        model=model,
+                        success=True,
+                        status_code=200,
+                        response_time=time.time() - start,
+                    )
+                except Exception:
+                    pass
+                logger.debug(
+                    f"Collect completed, recorded usage for token {token[:10]}... (effort={effort.value})"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record collect usage: {e}")
+            return result
 
 
 __all__ = [
