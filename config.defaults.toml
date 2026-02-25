@@ -27,7 +27,6 @@ dynamic_statsig = true
 # 过滤的特殊标签列表
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
 
-<<<<<<< HEAD
 
 # ==================== 代理配置 ====================
 [proxy]
