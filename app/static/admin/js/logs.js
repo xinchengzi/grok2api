@@ -82,7 +82,7 @@ async function refreshLogs() {
 
   try {
     const base = apiBasePrefix();
-    const res = await fetch(`${base}/api/v1/admin/logs?${params.toString()}`, {
+    const res = await fetch(`${base}/v1/admin/logs?${params.toString()}`, {
       headers: buildAuthHeaders()
     });
     if (res.status === 401) {
@@ -151,7 +151,7 @@ async function clearLogs() {
 
   try {
     const base = apiBasePrefix();
-    const res = await fetch(`${base}/api/v1/admin/logs`, {
+    const res = await fetch(`${base}/v1/admin/logs`, {
       method: 'DELETE',
       headers: buildAuthHeaders()
     });
