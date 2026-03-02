@@ -1,10 +1,13 @@
 name: Build Custom Image
+# DISABLED: 已切换到上游官方镜像，不再需要构建自定义镜像
+# 恢复方法：删除 jobs 级别的 if: false
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read

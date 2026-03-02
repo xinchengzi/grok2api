@@ -1,4 +1,6 @@
 name: Sync Upstream and Build
+# DISABLED: 已切换到上游官方镜像，不再需要自动 rebase + 构建
+# 恢复方法：删除 jobs 级别的 if: false
 
 on:
   schedule:
@@ -7,6 +9,7 @@ on:
 
 jobs:
   sync-and-build:
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
